@@ -101,31 +101,55 @@ class _HomeScreenState extends State<HomeScreen> {
 
           return ListView.builder(
             itemCount: groups.length,
+            // W pliku home_screen.dart -> wewnątrz ListView.builder:
+
             itemBuilder: (ctx, index) {
               final group = groups[index];
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    child: Text(
-                      group.name.isNotEmpty ? group.name[0].toUpperCase() : '?',
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
-                  title: Text(group.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('Utworzono: ${group.createdAt.toString().split(' ')[0]}'),
-                  trailing: const Icon(Icons.arrow_forward_ios),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => GroupDetailScreen(group: group),
+
+              // Dismissible to widget, który pozwala na przesuwanie (swipe)
+              return Dismissible(
+                key: Key(group.id), // Unikalny klucz wymagany przez Fluttera
+                direction: DismissDirection.endToStart, // Przesuwanie od prawej do lewej
+                background: Container(
+                  color: Colors.red, // Czerwone tło
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 20),
+                  margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 10), // Żeby pasowało do Card
+                  child: const Icon(Icons.delete, color: Colors.white, size: 30),
+                ),
+                onDismissed: (direction) {
+                  // LOGIKA USUWANIA:
+                  // Ponieważ Group dziedziczy po HiveObject, ma metodę delete()!
+                  group.delete(); 
+                  
+                  // Opcjonalnie: Pokaż dymek z info
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Usunięto grupę: ${group.name}')),
+                  );
+                },
+                child: Card(
+                  margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      child: Text(
+                        group.name.isNotEmpty ? group.name[0].toUpperCase() : '?',
+                        style: const TextStyle(color: Colors.white),
                       ),
-                    ).then((_) {
-                      // Odśwież widok po powrocie (na wszelki wypadek)
-                      setState(() {});
-                    });
-                  },
+                    ),
+                    title: Text(group.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text('Utworzono: ${group.createdAt.toString().split(' ')[0]}'),
+                    trailing: const Icon(Icons.arrow_forward_ios),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => GroupDetailScreen(group: group),
+                        ),
+                      ).then((_) {
+                        setState(() {});
+                      });
+                    },
+                  ),
                 ),
               );
             },

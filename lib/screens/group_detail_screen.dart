@@ -206,23 +206,50 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 ? const Center(child: Text("Brak wydatków. Dodaj pierwszy!"))
                 : ListView.builder(
                     itemCount: widget.group.expenses.length,
+                    // W pliku group_detail_screen.dart -> sekcja wydatków:
+
                     itemBuilder: (ctx, index) {
                       final expense = widget.group.expenses[index];
+                      
+                      // Szukamy imienia płatnika (bez zmian)
                       final payerName = widget.group.members
                           .firstWhere((m) => m.id == expense.payerId,
                               orElse: () => Member(id: '', name: '?'))
                           .name;
 
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Colors.green[100],
-                          child: const Icon(Icons.attach_money, color: Colors.green),
+                      return Dismissible(
+                        key: Key(expense.id), // Klucz wydatku
+                        direction: DismissDirection.endToStart,
+                        background: Container(
+                          color: Colors.red.withOpacity(0.8),
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 20),
+                          child: const Icon(Icons.delete_forever, color: Colors.white),
                         ),
-                        title: Text(expense.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                        subtitle: Text('Płacił: $payerName'),
-                        trailing: Text(
-                          '${expense.amount.toStringAsFixed(2)} zł',
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        onDismissed: (direction) {
+                          // LOGIKA USUWANIA WYDATKU:
+                          setState(() {
+                            // 1. Usuwamy z lokalnej listy
+                            widget.group.expenses.removeAt(index);
+                          });
+                          // 2. Zapisujemy zmianę w Hive (nadpisujemy grupę na dysku)
+                          widget.group.save();
+
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Wydatek usunięty')),
+                          );
+                        },
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: Colors.green[100],
+                            child: const Icon(Icons.attach_money, color: Colors.green),
+                          ),
+                          title: Text(expense.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text('Płacił: $payerName'),
+                          trailing: Text(
+                            '${expense.amount.toStringAsFixed(2)} zł',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
                         ),
                       );
                     },
