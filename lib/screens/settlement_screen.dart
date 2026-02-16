@@ -9,27 +9,42 @@ class SettlementScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Obliczamy sumę wszystkich wydatków
-    double totalExpense = 0;
-    // Mapa: ID użytkownika -> Ile zapłacił
+    // 1. Mapa: Kto ile zapłacił (wydał z portfela)
     Map<String, double> paidByMember = {};
+    // 2. Mapa: Kto ile powinien był zapłacić (skonsumował)
+    Map<String, double> shareOfMember = {};
 
-    // Inicjalizujemy mapę zerami
+    // Inicjalizacja zerami
     for (var member in group.members) {
       paidByMember[member.id] = 0.0;
+      shareOfMember[member.id] = 0.0;
     }
 
-    // Sumujemy wydatki
+    double totalExpense = 0;
+
     for (var expense in group.expenses) {
       totalExpense += expense.amount;
+      
+      // Dodajemy do tego, co zapłacił z własnej kieszeni
       if (paidByMember.containsKey(expense.payerId)) {
         paidByMember[expense.payerId] = paidByMember[expense.payerId]! + expense.amount;
       }
-    }
 
-    // 2. Obliczamy średnią na osobę
-    // Jeśli nie ma członków, dzielimy przez 1 żeby uniknąć błędu
-    double sharePerPerson = totalExpense / (group.members.isEmpty ? 1 : group.members.length);
+      // KROK KLUCZOWY: Ustalamy, na kogo dzielimy
+      // Jeśli lista jest pusta (stare wydatki), zakładamy, że na wszystkich
+      final beneficiaries = expense.beneficiaryIds.isEmpty 
+          ? group.members.map((e) => e.id).toList() 
+          : expense.beneficiaryIds;
+
+      double splitAmount = expense.amount / beneficiaries.length;
+
+      // Dodajemy dług każdemu beneficjentowi
+      for (var beneficiaryId in beneficiaries) {
+        if (shareOfMember.containsKey(beneficiaryId)) {
+          shareOfMember[beneficiaryId] = shareOfMember[beneficiaryId]! + splitAmount;
+        }
+      }
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -38,7 +53,6 @@ class SettlementScreen extends StatelessWidget {
       ),
       body: Column(
         children: [
-          // Karta z ogólną sumą
           Card(
             margin: const EdgeInsets.all(16),
             color: Theme.of(context).colorScheme.primaryContainer,
@@ -57,21 +71,16 @@ class SettlementScreen extends StatelessWidget {
             ),
           ),
           
-          const Padding(
-            padding: EdgeInsets.only(bottom: 10),
-            child: Text("Bilans (równy podział):", style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-
-          // Lista z bilansem każdego uczestnika
           Expanded(
             child: ListView.builder(
               itemCount: group.members.length,
               itemBuilder: (ctx, index) {
                 final member = group.members[index];
                 final paid = paidByMember[member.id] ?? 0.0;
-                final balance = paid - sharePerPerson; 
-                // Jeśli balance > 0 -> ktoś ma odzyskać
-                // Jeśli balance < 0 -> ktoś musi oddać
+                final shouldPay = shareOfMember[member.id] ?? 0.0;
+                
+                // Bilans = To co zapłaciłem - To co zjadłem
+                final balance = paid - shouldPay; 
 
                 final isPositive = balance >= 0;
                 final color = isPositive ? Colors.green : Colors.red;
@@ -85,7 +94,8 @@ class SettlementScreen extends StatelessWidget {
                       child: Text(member.name[0], style: TextStyle(color: color, fontWeight: FontWeight.bold)),
                     ),
                     title: Text(member.name),
-                    subtitle: Text("Zapłacił(a): ${paid.toStringAsFixed(2)} zł"),
+                    subtitle: Text("Zapłacił: ${paid.toStringAsFixed(2)} zł\nSkonsumował: ${shouldPay.toStringAsFixed(2)} zł"),
+                    isThreeLine: true,
                     trailing: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.end,
