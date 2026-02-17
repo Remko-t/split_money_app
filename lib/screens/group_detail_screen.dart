@@ -4,6 +4,8 @@ import '../models/group.dart';
 import '../models/member.dart';
 import '../models/expense.dart';
 import 'settlement_screen.dart'; // Import ekranu rozliczeń
+import 'dart:io'; // Do obsługi plików
+import 'package:image_picker/image_picker.dart'; // Do aparatu
 
 class GroupDetailScreen extends StatefulWidget {
   final Group group;
@@ -22,9 +24,41 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   String? _selectedPayerId;
   bool _isSearching = false; // Czy pasek szukania jest otwarty?
   String _searchQuery = "";  // Co wpisał użytkownik?
+  String? _selectedReceiptPath; // Tu trzymamy ścieżkę do zdjęcia
+  final ImagePicker _picker = ImagePicker(); // Obiekt biblioteki
   // To będzie trzymać zaznaczone osoby podczas dodawania
-List<String> _selectedBeneficiaries = [];
+  List<String> _selectedBeneficiaries = [];
 
+  Future<void> _pickImage(ImageSource source, StateSetter setModalState) async {
+  try {
+    final XFile? pickedFile = await _picker.pickImage(source: source, imageQuality: 50);
+    if (pickedFile != null) {
+      setModalState(() {
+        _selectedReceiptPath = pickedFile.path;
+      });
+    }
+  } catch (e) {
+    // Obsługa błędów (np. brak uprawnień)
+    print("Błąd zdjęcia: $e");
+  }
+}
+  void _showReceiptDialog(String path) {
+  showDialog(
+    context: context,
+    builder: (ctx) => Dialog(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Image.file(File(path)),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Zamknij"),
+          )
+        ],
+      ),
+    ),
+  );
+}
   // --- Funkcje do obsługi Członków ---
 
   void _addMember() {
@@ -81,6 +115,7 @@ List<String> _selectedBeneficiaries = [];
     date: DateTime.now(),
     category: _selectedCategory,
     beneficiaryIds: List.from(_selectedBeneficiaries),
+    receiptPath: _selectedReceiptPath,
   );
 
   setState(() {
@@ -104,6 +139,7 @@ List<String> _selectedBeneficiaries = [];
   _selectedPayerId = null;
   _selectedBeneficiaries = [];
   Navigator.pop(context);
+  _selectedReceiptPath = null;
 }
 
   void _showAddExpenseSheet({Expense? existingExpense}) {
@@ -125,7 +161,7 @@ List<String> _selectedBeneficiaries = [];
   if (isEditing) {
     _expenseTitleController.text = existingExpense.title;
     _expenseAmountController.text = existingExpense.amount.toString();
-    
+    _selectedReceiptPath = existingExpense.receiptPath;
     // Sprawdzamy, czy płatnik nadal istnieje w grupie (na wypadek gdybyś go usunął)
     if (widget.group.members.any((m) => m.id == existingExpense.payerId)) {
        _selectedPayerId = existingExpense.payerId;
@@ -142,23 +178,22 @@ List<String> _selectedBeneficiaries = [];
     _expenseTitleController.clear();
     _expenseAmountController.clear();
     
-    // Tu był błąd! Teraz jest bezpiecznie, bo wiemy, że members.first istnieje (dzięki if na górze)
+    
+    // members.first istnieje (dzięki if na górze)
     _selectedPayerId = widget.group.members.first.id;
     
     _selectedCategory = 'other';
     _selectedBeneficiaries = widget.group.members.map((e) => e.id).toList();
+    _selectedReceiptPath = null;
   }
 
   showModalBottomSheet(
-    // ... reszta kodu bez zmian (context, builder itd.) ...
     context: context,
     isScrollControlled: true,
     builder: (ctx) {
       return StatefulBuilder(
         builder: (BuildContext context, StateSetter setModalState) {
-           // ... (tu wklej resztę zawartości buildera z poprzedniego kroku) ...
-           // Jeśli nie wiesz co tu wkleić, daj znać, wyślę cały plik!
-           return Padding(
+          return Padding(
             padding: EdgeInsets.only(
               bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
               left: 20, right: 20, top: 20,
@@ -168,8 +203,7 @@ List<String> _selectedBeneficiaries = [];
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(isEditing ? 'Edytuj Wydatek' : 'Nowy Wydatek', style: Theme.of(context).textTheme.titleLarge),
-                
-                // ... Kod kategorii ...
+              
                 const SizedBox(height: 10),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
@@ -248,6 +282,59 @@ List<String> _selectedBeneficiaries = [];
                   onPressed: () => _saveExpense(existingId: existingExpense?.id),
                   icon: const Icon(Icons.check),
                   label: Text(isEditing ? 'Zapisz zmiany' : 'Dodaj wydatek'),
+                ),
+                const SizedBox(height: 15),
+                const Text("Paragon (opcjonalnie):", style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 10),
+                
+                Row(
+                  children: [
+                    // Podgląd zdjęcia (jeśli jest)
+                    if (_selectedReceiptPath != null)
+                      Stack(
+                        children: [
+                          Container(
+                            width: 80, height: 80,
+                            margin: const EdgeInsets.only(right: 10),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey),
+                              borderRadius: BorderRadius.circular(8),
+                              image: DecorationImage(
+                                image: FileImage(File(_selectedReceiptPath!)),
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            right: 0, top: 0,
+                            child: GestureDetector(
+                              onTap: () => setModalState(() => _selectedReceiptPath = null),
+                              child: const CircleAvatar(
+                                radius: 10, backgroundColor: Colors.red,
+                                child: Icon(Icons.close, size: 12, color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    
+                    // Przyciski
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        TextButton.icon(
+                          onPressed: () => _pickImage(ImageSource.camera, setModalState),
+                          icon: const Icon(Icons.camera_alt),
+                          label: const Text("Zrób zdjęcie"),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => _pickImage(ImageSource.gallery, setModalState),
+                          icon: const Icon(Icons.photo_library),
+                          label: const Text("Wybierz z galerii"),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -405,9 +492,19 @@ List<String> _selectedBeneficiaries = [];
                               ),
                               title: Text(expense.title, style: const TextStyle(fontWeight: FontWeight.bold)),
                               subtitle: Text('Płacił: $payerName'),
-                              trailing: Text(
-                                '${expense.amount.toStringAsFixed(2)} zł',
-                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min, // Żeby nie rozepchało wiersza
+                                children: [
+                                  if (expense.receiptPath != null)
+                                    IconButton(
+                                      icon: const Icon(Icons.receipt, color: Colors.blueGrey),
+                                      onPressed: () => _showReceiptDialog(expense.receiptPath!),
+                                    ),
+                                  Text(
+                                    '${expense.amount.toStringAsFixed(2)} zł',
+                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
                               ),
                               onTap: () {
                                 _showAddExpenseSheet(existingExpense: expense);

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "808228391597",
+    "project_id": "rozliczacz-app",
+    "storage_bucket": "rozliczacz-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:808228391597:android:fb45ee186fe8de94c2d424",
+        "android_client_info": {
+          "package_name": "com.example.split_money_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyARpNoaksIHKdke8H2D1EvEZQ4-hI9Zt28"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

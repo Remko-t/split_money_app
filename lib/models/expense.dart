@@ -23,9 +23,12 @@ class Expense {
   @HiveField(5)
   final List<String> beneficiaryIds;
 
-  @HiveField(6, defaultValue: 'other') 
+  @HiveField(6, defaultValue: 'other')
   final String category;
-  
+
+  @HiveField(7) // NOWE POLE
+  final String? receiptPath; // Może być null (brak zdjęcia)
+
   Expense({
     required this.id,
     required this.title,
@@ -33,6 +36,7 @@ class Expense {
     required this.payerId,
     required this.date,
     this.beneficiaryIds = const [],
-    this.category = 'other', // Domyślna kategoria dla starych wydatków
+    this.category = 'other',
+    this.receiptPath, // Dodaj to w konstruktorze
   });
 }

@@ -5,12 +5,17 @@ import 'models/group.dart';
 import 'models/member.dart';
 import 'models/expense.dart';
 import 'screens/home_screen.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   print("--- START APLIKACJI ---");
-
+  // Inicjalizacja Firebase
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   // 1. Inicjalizacja
   await Hive.initFlutter();
   print("Hive zainicjowany.");
