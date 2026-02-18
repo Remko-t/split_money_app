@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Ukrywamy konfigurację Firebase z kluczami API
+lib/firebase_options.dart
