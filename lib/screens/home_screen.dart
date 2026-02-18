@@ -1,8 +1,9 @@
-// plik: lib/screens/home_screen.dart
 import 'package:flutter/material.dart';
-import 'package:hive_flutter/hive_flutter.dart'; // Import Hive
+import 'package:firebase_auth/firebase_auth.dart'; // Użytkownik
+import 'package:cloud_firestore/cloud_firestore.dart'; // Baza danych
 import '../models/group.dart';
-import 'group_detail_screen.dart'; // Import ekranu szczegółów
+import '../models/member.dart';
+import 'group_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -12,55 +13,46 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // 1. To jest ta brakująca linijka! Kontroler pola tekstowego:
-  final TextEditingController _titleController = TextEditingController();
-  
-  // 2. Pobieramy otwarte pudełko z danymi
-  // Upewnij się, że nazwa 'groups_box' jest taka sama jak w main.dart
-  late Box<Group> _groupBox;
+  // Pobieramy obecnego użytkownika (wiemy, że jest, bo przeszliśmy logowanie)
+  final currentUser = FirebaseAuth.instance.currentUser!;
 
-  @override
-  void initState() {
-    super.initState();
-    // Pobieramy referencję do otwartego pudełka
-    _groupBox = Hive.box<Group>('groups_box');
-  }
+  void _addNewGroup(String name) {
+    if (name.isEmpty) return;
 
-  void _addNewGroup(String title) {
-    if (title.isEmpty) return;
-
-    final newGroup = Group(
-      id: DateTime.now().toString(),
-      name: title,
-      createdAt: DateTime.now(),
-      members: [],  // Inicjalizujemy puste listy
-      expenses: [],
-    );
-
-    // ZAPIS: Dodajemy do bazy Hive. To automatycznie zapisuje na dysk!
-    _groupBox.add(newGroup);
-    
-    _titleController.clear(); // Czyścimy pole
-    Navigator.of(context).pop(); // Zamykamy okno
+    // TWORZENIE GRUPY W CHMURZE (Firestore)
+    FirebaseFirestore.instance.collection('groups').add({
+      'name': name,
+      'ownerId': currentUser.uid, // Zapisujemy, kto założył
+      'created': Timestamp.now(),
+      // Lista osób, które mają dostęp (na start tylko Ty)
+      'memberIds': [currentUser.uid], 
+      // Na początku lista wydatków i członków (imiona) jest pusta
+      'membersData': [], 
+      'expensesData': [],
+    });
   }
 
   void _showAddGroupDialog() {
+    final nameController = TextEditingController();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Nowa Grupa'),
         content: TextField(
-          controller: _titleController,
-          decoration: const InputDecoration(labelText: 'Nazwa (np. Mazury 2024)'),
+          controller: nameController,
+          decoration: const InputDecoration(labelText: 'Nazwa wyjazdu (np. Mazury)'),
           autofocus: true,
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(ctx).pop(),
             child: const Text('Anuluj'),
           ),
-          FilledButton(
-            onPressed: () => _addNewGroup(_titleController.text),
+          ElevatedButton(
+            onPressed: () {
+              _addNewGroup(nameController.text);
+              Navigator.of(ctx).pop();
+            },
             child: const Text('Utwórz'),
           ),
         ],
@@ -68,98 +60,116 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Funkcja pomocnicza: Zamienia "brzydkie" dane z chmury na nasz obiekt Group
+  // (To tymczasowe rozwiązanie, żeby nie psuć reszty aplikacji)
+  Group _mapFirestoreToGroup(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    
+    // Firebase przechowuje daty jako Timestamp. Musimy to zamienić na DateTime.
+    // Jeśli z jakiegoś powodu daty nie ma w bazie, dajemy dzisiejszą jako zabezpieczenie.
+    DateTime parsedDate = DateTime.now();
+    if (data['created'] != null) {
+      parsedDate = (data['created'] as Timestamp).toDate();
+    }
+
+    // Tworzymy grupę "w locie"
+    final group = Group(
+      id: doc.id, 
+      name: data['name'] ?? 'Bez nazwy',
+      createdAt: parsedDate, // <--- DODANY BRAKUJĄCY PARAMETR
+      members: [], 
+      expenses: [], 
+    );
+    
+    return group;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Moje Wyjazdy'),
-        centerTitle: true,
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: const Text('Twoje Wyjazdy 🌍'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () => FirebaseAuth.instance.signOut(), // Wylogowanie
+          ),
+        ],
       ),
-      
-      // ODCZYT: Używamy ValueListenableBuilder.
-      // To widget, który sam się odświeża, gdy coś zmieni się w bazie Hive!
-      body: ValueListenableBuilder(
-        valueListenable: _groupBox.listenable(),
-        builder: (context, Box<Group> box, _) {
-          // Pobieramy dane z pudełka jako listę
-          // cast<Group>() upewnia się, że typy się zgadzają
-          final groups = box.values.toList().cast<Group>();
-
-          if (groups.isEmpty) {
+      // NASŁUCHIWANIE DANYCH Z CHMURY
+      body: StreamBuilder<QuerySnapshot>(
+        // Pytanie do bazy: "Daj mi grupy, gdzie jestem na liście uczestników"
+        stream: FirebaseFirestore.instance
+            .collection('groups')
+            .where('memberIds', arrayContains: currentUser.uid)
+            // orderBy('created', descending: true) // Najnowsze na górze
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
             return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(Icons.group_off, size: 64, color: Colors.grey),
-                  SizedBox(height: 16),
-                  Text('Brak grup. Dodaj pierwszą!', style: TextStyle(color: Colors.grey)),
+                children: [
+                  const Icon(Icons.beach_access, size: 80, color: Colors.grey),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Brak wyjazdów.\nKliknij "+" aby dodać pierwszy!',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey),
+                  ),
                 ],
               ),
             );
           }
 
+          final docs = snapshot.data!.docs;
+
           return ListView.builder(
-            itemCount: groups.length,
-            // W pliku home_screen.dart -> wewnątrz ListView.builder:
-
+            itemCount: docs.length,
+            padding: const EdgeInsets.all(10),
             itemBuilder: (ctx, index) {
-              final group = groups[index];
-
-              // Dismissible to widget, który pozwala na przesuwanie (swipe)
-              return Dismissible(
-                key: Key(group.id), // Unikalny klucz wymagany przez Fluttera
-                direction: DismissDirection.endToStart, // Przesuwanie od prawej do lewej
-                background: Container(
-                  color: Colors.red, // Czerwone tło
-                  alignment: Alignment.centerRight,
-                  padding: const EdgeInsets.only(right: 20),
-                  margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 10), // Żeby pasowało do Card
-                  child: const Icon(Icons.delete, color: Colors.white, size: 30),
-                ),
-                onDismissed: (direction) {
-                  // LOGIKA USUWANIA:
-                  // Ponieważ Group dziedziczy po HiveObject, ma metodę delete()!
-                  group.delete(); 
-                  
-                  // Opcjonalnie: Pokaż dymek z info
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Usunięto grupę: ${group.name}')),
-                  );
-                },
-                child: Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: Theme.of(context).colorScheme.primary,
-                      child: Text(
-                        group.name.isNotEmpty ? group.name[0].toUpperCase() : '?',
-                        style: const TextStyle(color: Colors.white),
-                      ),
+              final groupDoc = docs[index];
+              final groupData = groupDoc.data() as Map<String, dynamic>;
+              
+              return Card(
+                elevation: 3,
+                margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 5),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    child: Text(
+                      (groupData['name'] as String).isNotEmpty ? (groupData['name'] as String)[0].toUpperCase() : '?',
+                      style: const TextStyle(color: Colors.white),
                     ),
-                    title: Text(group.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text('Utworzono: ${group.createdAt.toString().split(' ')[0]}'),
-                    trailing: const Icon(Icons.arrow_forward_ios),
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) => GroupDetailScreen(group: group),
-                        ),
-                      ).then((_) {
-                        setState(() {});
-                      });
-                    },
                   ),
+                  title: Text(
+                    groupData['name'], 
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
+                  subtitle: Text("ID: ...${groupDoc.id.substring(groupDoc.id.length - 4)}"), // Pokazuje końcówkę ID
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: () {
+                    // Konwertujemy na obiekt Group i wchodzimy do środka
+                    final groupObject = _mapFirestoreToGroup(groupDoc);
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (ctx) => GroupDetailScreen(group: groupObject),
+                      ),
+                    );
+                  },
                 ),
               );
             },
           );
         },
       ),
-
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddGroupDialog,
-        label: const Text('Nowa grupa'),
+        label: const Text('Nowy Wyjazd'),
         icon: const Icon(Icons.add),
       ),
     );

@@ -1,59 +1,74 @@
-// plik: lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'models/group.dart';
-import 'models/member.dart';
-import 'models/expense.dart';
-import 'screens/home_screen.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_core/firebase_core.dart'; // Import Firebase Core
+import 'package:firebase_auth/firebase_auth.dart'; // Import Firebase Auth
+
+// Import konfiguracji Firebase (plik wygenerowany przez terminal)
 import 'firebase_options.dart';
 
+// Importy Twoich modeli (potrzebne do Hive)
+import 'models/group.dart';
+import 'models/expense.dart';
+import 'models/member.dart';
+
+// Importy ekranów
+import 'screens/home_screen.dart'; // Twoja lista grup (zgodnie ze screenem)
+import 'screens/auth_screen.dart'; // Twój nowy ekran logowania
+
 void main() async {
+  // 1. Przygotowanie silnika Fluttera
   WidgetsFlutterBinding.ensureInitialized();
 
-  print("--- START APLIKACJI ---");
-  // Inicjalizacja Firebase
+  // 2. Inicjalizacja Firebase (łączenie z chmurą)
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  // 1. Inicjalizacja
+
+  // 3. Inicjalizacja Hive (lokalna baza danych)
   await Hive.initFlutter();
-  print("Hive zainicjowany.");
 
-  // 2. Rejestracja adapterów
+  // Rejestracja adapterów Hive
   Hive.registerAdapter(GroupAdapter());
-  Hive.registerAdapter(MemberAdapter());
   Hive.registerAdapter(ExpenseAdapter());
-  print("Adaptery zarejestrowane.");
+  Hive.registerAdapter(MemberAdapter());
 
-  // 3. Otwarcie pudełka
-  var box = await Hive.openBox<Group>('groups_box');
-  print("Pudełko otwarte. Liczba grup w bazie: ${box.length}");
+  // Otwarcie pudełka z grupami
+  await Hive.openBox<Group>('groups_box');
 
-  if (box.isNotEmpty) {
-    print("Pierwsza grupa: ${box.getAt(0)?.name}");
-  } else {
-    print("Baza jest PUSTA.");
-  }
-
-  print("--- KONIEC INICJALIZACJI ---");
-
-  runApp(const SplitMoneyApp());
+  // 4. Start aplikacji
+  runApp(const MyApp());
 }
 
-class SplitMoneyApp extends StatelessWidget {
-  const SplitMoneyApp({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Rozliczacz',
-      debugShowCheckedModeBanner: false,
+      debugShowCheckedModeBanner: false, // Usuwa pasek "DEBUG"
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
+        // Twój morski kolor przewodni
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color.fromARGB(255, 30, 233, 199),
+        ),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      
+      // --- BRAMKA LOGOWANIA ---
+      home: StreamBuilder<User?>(
+        // Słuchamy, czy użytkownik jest zalogowany w Firebase
+        stream: FirebaseAuth.instance.authStateChanges(),
+        builder: (context, snapshot) {
+          // Jeśli mamy dane (użytkownik jest zalogowany) -> Idź do listy grup
+          if (snapshot.hasData) {
+            return const HomeScreen(); 
+          }
+          
+          // Jeśli nie mamy danych (wylogowany) -> Pokaż logowanie/rejestrację
+          return const AuthScreen(); 
+        },
+      ),
     );
   }
 }

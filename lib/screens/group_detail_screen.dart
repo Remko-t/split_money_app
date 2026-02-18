@@ -1,11 +1,13 @@
 // plik: lib/screens/group_detail_screen.dart
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../models/group.dart';
-import '../models/member.dart';
 import '../models/expense.dart';
-import 'settlement_screen.dart'; // Import ekranu rozliczeń
-import 'dart:io'; // Do obsługi plików
-import 'package:image_picker/image_picker.dart'; // Do aparatu
+import '../models/member.dart';
+import 'settlement_screen.dart';
 
 class GroupDetailScreen extends StatefulWidget {
   final Group group;
@@ -17,386 +19,374 @@ class GroupDetailScreen extends StatefulWidget {
 }
 
 class _GroupDetailScreenState extends State<GroupDetailScreen> {
+  // --- ZMIENNE STANU ---
   final _memberController = TextEditingController();
   final _expenseTitleController = TextEditingController();
   final _expenseAmountController = TextEditingController();
-  String _selectedCategory = 'other'; // Domyślnie "Inne"
+
+  // Zmienne do wyszukiwania
+  bool _isSearching = false;
+  String _searchQuery = "";
+
+  // Zmienne do formularza wydatku
   String? _selectedPayerId;
-  bool _isSearching = false; // Czy pasek szukania jest otwarty?
-  String _searchQuery = "";  // Co wpisał użytkownik?
-  String? _selectedReceiptPath; // Tu trzymamy ścieżkę do zdjęcia
-  final ImagePicker _picker = ImagePicker(); // Obiekt biblioteki
-  // To będzie trzymać zaznaczone osoby podczas dodawania
   List<String> _selectedBeneficiaries = [];
+  String _selectedCategory = 'other';
 
+  // Zmienne do zdjęć
+  final ImagePicker _picker = ImagePicker();
+  String? _selectedReceiptPath;
+
+  // Mapa kategorii
+  final Map<String, Map<String, dynamic>> categories = {
+    'food': {'label': 'Jedzenie', 'icon': Icons.restaurant, 'color': Colors.orange},
+    'transport': {'label': 'Transport', 'icon': Icons.directions_car, 'color': Colors.blue},
+    'home': {'label': 'Nocleg', 'icon': Icons.home, 'color': Colors.purple},
+    'entertainment': {'label': 'Rozrywka', 'icon': Icons.movie, 'color': Colors.pink},
+    'shopping': {'label': 'Zakupy', 'icon': Icons.shopping_cart, 'color': Colors.green},
+    'other': {'label': 'Inne', 'icon': Icons.category, 'color': Colors.grey},
+  };
+
+  // --- FUNKCJE ---
+
+  // 1. Robienie zdjęcia
   Future<void> _pickImage(ImageSource source, StateSetter setModalState) async {
-  try {
-    final XFile? pickedFile = await _picker.pickImage(source: source, imageQuality: 50);
-    if (pickedFile != null) {
-      setModalState(() {
-        _selectedReceiptPath = pickedFile.path;
-      });
+    try {
+      final XFile? pickedFile = await _picker.pickImage(source: source, imageQuality: 50);
+      if (pickedFile != null) {
+        setModalState(() {
+          _selectedReceiptPath = pickedFile.path;
+        });
+      }
+    } catch (e) {
+      debugPrint("Błąd zdjęcia: $e");
     }
-  } catch (e) {
-    // Obsługa błędów (np. brak uprawnień)
-    print("Błąd zdjęcia: $e");
   }
-}
+
+  // 2. Podgląd dużego zdjęcia
   void _showReceiptDialog(String path) {
-  showDialog(
-    context: context,
-    builder: (ctx) => Dialog(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Image.file(File(path)),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("Zamknij"),
-          )
-        ],
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 450),
+              child: Image.file(File(path), fit: BoxFit.contain),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Zamknij"),
+            )
+          ],
+        ),
       ),
-    ),
-  );
-}
-  // --- Funkcje do obsługi Członków ---
-
-  void _addMember() {
-    if (_memberController.text.isEmpty) return;
-    
-    setState(() {
-      widget.group.members.add(
-        Member(id: DateTime.now().toString(), name: _memberController.text),
-      );
-    });
-
-    // ZAPIS HIVE: To jest kluczowe! Zapisujemy stan obiektu na dysku.
-    widget.group.save(); 
-
-    _memberController.clear();
-    Navigator.pop(context);
+    );
   }
 
+  // 3. Zapis osoby do Firestore
+  void _addMember() {
+    final name = _memberController.text.trim();
+    if (name.isNotEmpty) {
+      final newMember = {'id': DateTime.now().toString(), 'name': name};
+
+      // Zapis do chmury (Tablica membersData)
+      FirebaseFirestore.instance.collection('groups').doc(widget.group.id).update({
+        'membersData': FieldValue.arrayUnion([newMember])
+      });
+
+      _memberController.clear();
+      Navigator.of(context).pop();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Dodano osobę: $name')),
+      );
+    }
+  }
+
+  // 4. Okno dodawania osoby
   void _showAddMemberDialog() {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Dodaj osobę'),
+        title: const Text('Dodaj Uczestnika'),
         content: TextField(
           controller: _memberController,
           decoration: const InputDecoration(labelText: 'Imię'),
           autofocus: true,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Anuluj')),
-          FilledButton(onPressed: _addMember, child: const Text('Dodaj')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Anuluj'),
+          ),
+          ElevatedButton(
+            onPressed: _addMember,
+            child: const Text('Dodaj'),
+          ),
         ],
       ),
     );
   }
 
-  // --- Funkcje do obsługi Wydatków ---
+  // 5. Zapis wydatku do Firestore (Nowy lub Edycja)
+  Future<void> _saveExpense({String? existingId}) async {
+    final title = _expenseTitleController.text.trim();
+    final amount = double.tryParse(_expenseAmountController.text) ?? 0;
 
-  void _saveExpense({String? existingId}) {
-  final title = _expenseTitleController.text;
-  final amount = double.tryParse(_expenseAmountController.text);
-
-  if (title.isEmpty || amount == null || amount <= 0 || _selectedPayerId == null || _selectedBeneficiaries.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Uzupełnij dane!')));
-    return;
-  }
-
-  // Tworzymy nowy obiekt wydatku
-  final newExpense = Expense(
-    id: existingId ?? DateTime.now().toString(), // Zachowaj stare ID lub wygeneruj nowe
-    title: title,
-    amount: amount,
-    payerId: _selectedPayerId!,
-    date: DateTime.now(),
-    category: _selectedCategory,
-    beneficiaryIds: List.from(_selectedBeneficiaries),
-    receiptPath: _selectedReceiptPath,
-  );
-
-  setState(() {
-    if (existingId != null) {
-      // TRYB EDYCJI: Znajdź indeks starego wydatku i podmień go
-      final index = widget.group.expenses.indexWhere((e) => e.id == existingId);
-      if (index != -1) {
-        widget.group.expenses[index] = newExpense;
-      }
-    } else {
-      // TRYB DODAWANIA: Dodaj na koniec listy
-      widget.group.expenses.add(newExpense);
-    }
-  });
-
-  widget.group.save(); // Zapisz zmiany w Hive
-
-  // Czyścimy kontrolery
-  _expenseTitleController.clear();
-  _expenseAmountController.clear();
-  _selectedPayerId = null;
-  _selectedBeneficiaries = [];
-  Navigator.pop(context);
-  _selectedReceiptPath = null;
-}
-
-  void _showAddExpenseSheet({Expense? existingExpense}) {
-  // --- POPRAWKA: ZABEZPIECZENIE ---
-  // Sprawdzamy, czy w ogóle jest kto płacić. Jeśli lista pusta -> przerywamy.
-  if (widget.group.members.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Najpierw dodaj uczestników do grupy!'),
-        backgroundColor: Colors.red,
-      ),
-    );
-    return; // Stop! Nie idź dalej, bo wyrzucisz błąd.
-  }
-  // --------------------------------
-
-  final isEditing = existingExpense != null;
-
-  if (isEditing) {
-    _expenseTitleController.text = existingExpense.title;
-    _expenseAmountController.text = existingExpense.amount.toString();
-    _selectedReceiptPath = existingExpense.receiptPath;
-    // Sprawdzamy, czy płatnik nadal istnieje w grupie (na wypadek gdybyś go usunął)
-    if (widget.group.members.any((m) => m.id == existingExpense.payerId)) {
-       _selectedPayerId = existingExpense.payerId;
-    } else {
-       _selectedPayerId = widget.group.members.first.id; // Fallback
+    if (title.isEmpty || amount <= 0 || _selectedPayerId == null || _selectedBeneficiaries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Wypełnij poprawnie wszystkie pola i wybierz osoby!')),
+      );
+      return;
     }
 
-    _selectedCategory = existingExpense.category;
-    _selectedBeneficiaries = existingExpense.beneficiaryIds.isEmpty 
-        ? widget.group.members.map((e) => e.id).toList() 
-        : List.from(existingExpense.beneficiaryIds);
-  } else {
-    // Nowy wydatek
+    // Mapa wydatku dla bazy Firebase
+    final expenseMap = {
+      'id': existingId ?? DateTime.now().toString(),
+      'title': title,
+      'amount': amount,
+      'payerId': _selectedPayerId,
+      'beneficiaryIds': _selectedBeneficiaries,
+      'date': Timestamp.now(),
+      'category': _selectedCategory,
+      'receiptPath': _selectedReceiptPath,
+    };
+
+    final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
+
+    if (existingId == null) {
+      // NOWY WYDATEK - szybkie dodanie do tablicy
+      await docRef.update({
+        'expensesData': FieldValue.arrayUnion([expenseMap])
+      });
+    } else {
+      // EDYCJA WYDATKU - pobieramy starą listę, podmieniamy ten wydatek i zapisujemy
+      final doc = await docRef.get();
+      final currentData = doc.data()?['expensesData'] as List<dynamic>? ?? [];
+      final updatedList = currentData.map((e) {
+        return (e['id'] == existingId) ? expenseMap : e;
+      }).toList();
+      await docRef.update({'expensesData': updatedList});
+    }
+
+    // Resetowanie pól po zapisie
     _expenseTitleController.clear();
     _expenseAmountController.clear();
-    
-    
-    // members.first istnieje (dzięki if na górze)
-    _selectedPayerId = widget.group.members.first.id;
-    
-    _selectedCategory = 'other';
-    _selectedBeneficiaries = widget.group.members.map((e) => e.id).toList();
     _selectedReceiptPath = null;
+    
+    // Sprawdzamy czy widget jest jeszcze zbudowany zanim zamkniemy okno
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    builder: (ctx) {
-      return StatefulBuilder(
-        builder: (BuildContext context, StateSetter setModalState) {
-          return Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
-              left: 20, right: 20, top: 20,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(isEditing ? 'Edytuj Wydatek' : 'Nowy Wydatek', style: Theme.of(context).textTheme.titleLarge),
-              
-                const SizedBox(height: 10),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: categories.entries.map((entry) {
-                      final key = entry.key;
-                      final data = entry.value;
-                      final isSelected = _selectedCategory == key;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8.0),
-                        child: ChoiceChip(
-                          label: Text(data['label']),
-                          avatar: Icon(data['icon'], size: 18, color: isSelected ? Colors.white : data['color']),
-                          selected: isSelected,
-                          selectedColor: data['color'],
-                          labelStyle: TextStyle(color: isSelected ? Colors.white : Colors.black),
-                          onSelected: (bool selected) {
-                            setModalState(() {
-                              _selectedCategory = (selected ? key : 'other');
-                            });
-                          },
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
+  // 6. Formularz Wydatku (Wysuwany z dołu)
+  void _showAddExpenseSheet({Expense? existingExpense}) {
+    if (widget.group.members.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Najpierw dodaj uczestników!')),
+      );
+      return;
+    }
 
-                const SizedBox(height: 15),
-                TextField(
-                  controller: _expenseTitleController,
-                  decoration: const InputDecoration(labelText: 'Co kupiono?'),
-                  autofocus: !isEditing,
-                ),
-                TextField(
-                  controller: _expenseAmountController,
-                  decoration: const InputDecoration(labelText: 'Kwota'),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<String>(
-                  value: _selectedPayerId,
-                  items: widget.group.members.map((member) => DropdownMenuItem(value: member.id, child: Text(member.name))).toList(),
-                  onChanged: (value) => setModalState(() => _selectedPayerId = value),
-                  decoration: const InputDecoration(labelText: 'Kto płacił?'),
-                ),
-                
-                const SizedBox(height: 15),
-                const Text("Dla kogo?", style: TextStyle(fontWeight: FontWeight.bold)),
-                SizedBox(
-                  height: 150,
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: widget.group.members.map((member) {
-                      final isSelected = _selectedBeneficiaries.contains(member.id);
-                      return CheckboxListTile(
-                        title: Text(member.name),
-                        value: isSelected,
-                        onChanged: (bool? checked) {
-                          setModalState(() {
-                            if (checked == true) {
-                              _selectedBeneficiaries.add(member.id);
-                            } else {
-                              _selectedBeneficiaries.remove(member.id);
-                            }
-                          });
-                        },
-                        contentPadding: EdgeInsets.zero,
-                        visualDensity: VisualDensity.compact,
-                      );
-                    }).toList(),
-                  ),
-                ),
+    final isEditing = existingExpense != null;
 
-                const SizedBox(height: 10),
-                FilledButton.icon(
-                  onPressed: () => _saveExpense(existingId: existingExpense?.id),
-                  icon: const Icon(Icons.check),
-                  label: Text(isEditing ? 'Zapisz zmiany' : 'Dodaj wydatek'),
-                ),
-                const SizedBox(height: 15),
-                const Text("Paragon (opcjonalnie):", style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 10),
-                
-                Row(
+    if (isEditing) {
+      _expenseTitleController.text = existingExpense.title;
+      _expenseAmountController.text = existingExpense.amount.toString();
+      _selectedPayerId = existingExpense.payerId;
+      _selectedBeneficiaries = List.from(existingExpense.beneficiaryIds);
+      _selectedCategory = existingExpense.category;
+      _selectedReceiptPath = existingExpense.receiptPath;
+    } else {
+      _expenseTitleController.clear();
+      _expenseAmountController.clear();
+      _selectedPayerId = widget.group.members.first.id;
+      _selectedBeneficiaries = widget.group.members.map((m) => m.id).toList();
+      _selectedCategory = 'other';
+      _selectedReceiptPath = null;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+                left: 20, right: 20, top: 20,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Podgląd zdjęcia (jeśli jest)
-                    if (_selectedReceiptPath != null)
-                      Stack(
-                        children: [
-                          Container(
-                            width: 80, height: 80,
-                            margin: const EdgeInsets.only(right: 10),
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey),
-                              borderRadius: BorderRadius.circular(8),
-                              image: DecorationImage(
-                                image: FileImage(File(_selectedReceiptPath!)),
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            right: 0, top: 0,
-                            child: GestureDetector(
-                              onTap: () => setModalState(() => _selectedReceiptPath = null),
-                              child: const CircleAvatar(
-                                radius: 10, backgroundColor: Colors.red,
-                                child: Icon(Icons.close, size: 12, color: Colors.white),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                    Text(isEditing ? 'Edytuj Wydatek' : 'Nowy Wydatek', style: Theme.of(context).textTheme.titleLarge),
                     
-                    // Przyciski
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    TextField(
+                      controller: _expenseTitleController,
+                      decoration: const InputDecoration(labelText: 'Tytuł (np. Pizza)'),
+                    ),
+                    TextField(
+                      controller: _expenseAmountController,
+                      decoration: const InputDecoration(labelText: 'Kwota (zł)'),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    ),
+                    const SizedBox(height: 15),
+
+                    // Wybór Kategorii
+                    DropdownButtonFormField<String>(
+                      value: _selectedCategory,
+                      decoration: const InputDecoration(labelText: 'Kategoria'),
+                      items: categories.entries.map((entry) {
+                        return DropdownMenuItem<String>(
+                          value: entry.key,
+                          child: Row(
+                            children: [
+                              Icon(entry.value['icon'] as IconData, color: entry.value['color'] as Color),
+                              const SizedBox(width: 10),
+                              Text(entry.value['label'] as String),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        setModalState(() {
+                          _selectedCategory = val!;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 15),
+                    
+                    // --- ZDJĘCIE PARAGONU ---
+                    const Text("Paragon (opcjonalnie):", style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 10),
+                    Row(
                       children: [
-                        TextButton.icon(
-                          onPressed: () => _pickImage(ImageSource.camera, setModalState),
-                          icon: const Icon(Icons.camera_alt),
-                          label: const Text("Zrób zdjęcie"),
-                        ),
-                        TextButton.icon(
-                          onPressed: () => _pickImage(ImageSource.gallery, setModalState),
-                          icon: const Icon(Icons.photo_library),
-                          label: const Text("Wybierz z galerii"),
+                        if (_selectedReceiptPath != null)
+                          Stack(
+                            children: [
+                              Container(
+                                width: 80, height: 80,
+                                margin: const EdgeInsets.only(right: 10),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey),
+                                  borderRadius: BorderRadius.circular(8),
+                                  image: DecorationImage(
+                                    image: FileImage(File(_selectedReceiptPath!)),
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                right: 0, top: 0,
+                                child: GestureDetector(
+                                  onTap: () => setModalState(() => _selectedReceiptPath = null),
+                                  child: const CircleAvatar(
+                                    radius: 10, backgroundColor: Colors.red,
+                                    child: Icon(Icons.close, size: 12, color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () => _pickImage(ImageSource.camera, setModalState),
+                              icon: const Icon(Icons.camera_alt),
+                              label: const Text("Zrób zdjęcie"),
+                            ),
+                            TextButton.icon(
+                              onPressed: () => _pickImage(ImageSource.gallery, setModalState),
+                              icon: const Icon(Icons.photo_library),
+                              label: const Text("Z galerii"),
+                            ),
+                          ],
                         ),
                       ],
                     ),
+                    const SizedBox(height: 15),
+                    
+                    // Wybór płatnika
+                    DropdownButtonFormField<String>(
+                      value: _selectedPayerId,
+                      decoration: const InputDecoration(labelText: 'Kto płacił?'),
+                      items: widget.group.members.map((m) {
+                        return DropdownMenuItem(value: m.id, child: Text(m.name));
+                      }).toList(),
+                      onChanged: (val) {
+                        setModalState(() { _selectedPayerId = val; });
+                      },
+                    ),
+                    const SizedBox(height: 15),
+
+                    // Dla kogo?
+                    const Text('Dla kogo (kto z tego korzystał):', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ...widget.group.members.map((m) {
+                      return CheckboxListTile(
+                        title: Text(m.name),
+                        value: _selectedBeneficiaries.contains(m.id),
+                        onChanged: (bool? checked) {
+                          setModalState(() {
+                            if (checked == true) {
+                              _selectedBeneficiaries.add(m.id);
+                            } else {
+                              _selectedBeneficiaries.remove(m.id);
+                            }
+                          });
+                        },
+                      );
+                    }),
+
+                    const SizedBox(height: 20),
+                    ElevatedButton(
+                      onPressed: () => _saveExpense(existingId: isEditing ? existingExpense.id : null),
+                      child: Text(isEditing ? 'Zapisz zmiany' : 'Dodaj Wydatek'),
+                    ),
                   ],
                 ),
-              ],
-            ),
-          );
-        },
-      );
-    },
-  );
-}
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 
+  // --- BUDOWA EKRANU Z CHMURĄ ---
   @override
   Widget build(BuildContext context) {
-    // 1. FILTROWANIE LISTY
-    // Tworzymy nową listę, która zawiera tylko pasujące elementy
-    final displayedExpenses = widget.group.expenses.where((expense) {
-      final searchLower = _searchQuery.toLowerCase();
-      final titleLower = expense.title.toLowerCase();
-      // Szukamy w tytule LUB w kategorii
-      return titleLower.contains(searchLower) || expense.category.contains(searchLower);
-    }).toList();
-
-    // Odwracamy kolejność, żeby nowe były na górze (Opcjonalny bajer UX)
-    final expensesToShow = displayedExpenses.reversed.toList();
-
     return Scaffold(
       appBar: AppBar(
-        // 2. DYNAMICZNY TYTUŁ
-        iconTheme: const IconThemeData(color: Colors.black),
-
+        iconTheme: const IconThemeData(color: Colors.black), 
         title: _isSearching
             ? TextField(
                 autofocus: true,
-                cursorColor: Colors.black, // 1. CZARNY KURSOR
-                style: const TextStyle(
-                  color: Colors.black, // 2. CZARNY TEKST (widoczny na jasnym tle)
-                  fontSize: 18,
-                ),
+                cursorColor: Colors.black, // Czarny kursor i tekst (wyszukiwarka)
+                style: const TextStyle(color: Colors.black, fontSize: 18),
                 decoration: const InputDecoration(
                   hintText: 'Szukaj wydatku...',
-                  hintStyle: TextStyle(color: Colors.black54), // 3. SZARA PODPOWIEDŹ
+                  hintStyle: TextStyle(color: Colors.black54),
                   border: InputBorder.none,
                 ),
                 onChanged: (value) {
-                  setState(() {
-                    _searchQuery = value;
-                  });
+                  setState(() { _searchQuery = value; });
                 },
               )
-            : Text(
-                widget.group.name,
-                style: const TextStyle(color: Colors.black), // Tytuł też czarny
-              ),
+            : Text(widget.group.name, style: const TextStyle(color: Colors.black)),
         actions: [
           IconButton(
             icon: const Icon(Icons.pie_chart),
             tooltip: "Podsumowanie",
-            // Ikona będzie brała kolor z iconTheme (czarny)
             onPressed: () {
               Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (ctx) => SettlementScreen(group: widget.group),
-                ),
+                MaterialPageRoute(builder: (ctx) => SettlementScreen(group: widget.group)),
               );
             },
           ),
@@ -421,100 +411,151 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             )
         ],
       ),
-      body: Column(
-        children: [
-          // Pasek z członkami grupy (bez zmian)
-          Container(
-            height: 80,
-            color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.3),
-            child: widget.group.members.isEmpty 
-              ? const Center(child: Text("Brak uczestników"))
-              : ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: widget.group.members.length,
-                itemBuilder: (ctx, index) {
-                  final member = widget.group.members[index];
-                  return Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Chip(
-                      avatar: CircleAvatar(child: Text(member.name.isNotEmpty ? member.name[0] : '?')),
-                      label: Text(member.name),
-                    ),
-                  );
-                },
-              ),
-          ),
-          const Divider(height: 1),
+      
+      // STREAM BUILDER - Odświeża ekran automatycznie, gdy w chmurze coś się zmieni
+      body: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance.collection('groups').doc(widget.group.id).snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (!snapshot.hasData || snapshot.data?.data() == null) {
+            return const Center(child: Text("Błąd ładowania danych grupy."));
+          }
+
+          final data = snapshot.data!.data() as Map<String, dynamic>;
           
-          // LISTA WYDATKÓW (Zaktualizowana)
-          Expanded(
-            child: widget.group.expenses.isEmpty
-                ? const Center(child: Text("Brak wydatków. Dodaj pierwszy!"))
-                : expensesToShow.isEmpty // Jeśli są wydatki, ale filtr je ukrył
-                    ? const Center(child: Text("Nie znaleziono wydatków pasujących do wyszukiwania."))
-                    : ListView.builder(
-                        itemCount: expensesToShow.length,
-                        itemBuilder: (ctx, index) {
-                          final expense = expensesToShow[index];
-                          
-                          final payerName = widget.group.members
-                              .firstWhere((m) => m.id == expense.payerId,
-                                  orElse: () => Member(id: '', name: '?'))
-                              .name;
+          // PARSOWANIE UCZESTNIKÓW Z CHMURY
+          final rawMembers = data['membersData'] as List<dynamic>? ?? [];
+          final cloudMembers = rawMembers.map((m) => Member(id: m['id'], name: m['name'])).toList();
+          
+          // PARSOWANIE WYDATKÓW Z CHMURY
+          final rawExpenses = data['expensesData'] as List<dynamic>? ?? [];
+          final cloudExpenses = rawExpenses.map((e) {
+            return Expense(
+              id: e['id'],
+              title: e['title'],
+              amount: (e['amount'] as num).toDouble(),
+              payerId: e['payerId'],
+              date: (e['date'] as Timestamp).toDate(),
+              beneficiaryIds: List<String>.from(e['beneficiaryIds'] ?? []),
+              category: e['category'] ?? 'other',
+              receiptPath: e['receiptPath'],
+            );
+          }).toList();
 
-                          final catData = categories[expense.category] ?? categories['other']!;
+          // AKTUALIZACJA OBIEKTU GROUP - Żeby statystyki (SettlementScreen) miały aktualne dane
+          widget.group.members = cloudMembers;
+          widget.group.expenses = cloudExpenses;
 
-                          return Dismissible(
-                            key: Key(expense.id),
-                            direction: DismissDirection.endToStart,
-                            background: Container(
-                              color: Colors.red.withOpacity(0.8),
-                              alignment: Alignment.centerRight,
-                              padding: const EdgeInsets.only(right: 20),
-                              child: const Icon(Icons.delete_forever, color: Colors.white),
-                            ),
-                            onDismissed: (direction) {
-                              // --- NOWA LOGIKA USUWANIA (Bezpieczna) ---
-                              setState(() {
-                                // Usuwamy konkretny obiekt po ID, a nie po indeksie
-                                widget.group.expenses.removeWhere((e) => e.id == expense.id);
-                              });
-                              widget.group.save();
+          // FILTROWANIE WYDATKÓW (Wyszukiwarka)
+          final displayedExpenses = cloudExpenses.where((expense) {
+            final searchLower = _searchQuery.toLowerCase();
+            final titleLower = expense.title.toLowerCase();
+            return titleLower.contains(searchLower) || expense.category.contains(searchLower);
+          }).toList().reversed.toList(); // reversed daje najnowsze na górze
 
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Wydatek usunięty')),
+          return Column(
+            children: [
+              // PASEK Z UCZESTNIKAMI
+              Container(
+                height: 80,
+                color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.3),
+                child: cloudMembers.isEmpty 
+                  ? const Center(child: Text("Brak uczestników"))
+                  : ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: cloudMembers.length,
+                    itemBuilder: (ctx, index) {
+                      final member = cloudMembers[index];
+                      return Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Chip(
+                          avatar: CircleAvatar(child: Text(member.name.isNotEmpty ? member.name[0] : '?')),
+                          label: Text(member.name),
+                        ),
+                      );
+                    },
+                  ),
+              ),
+              const Divider(height: 1),
+              
+              // LISTA WYDATKÓW
+              Expanded(
+                child: cloudExpenses.isEmpty
+                    ? const Center(child: Text("Brak wydatków. Dodaj pierwszy!"))
+                    : displayedExpenses.isEmpty
+                        ? const Center(child: Text("Nie znaleziono pasujących wydatków."))
+                        : ListView.builder(
+                            itemCount: displayedExpenses.length,
+                            itemBuilder: (ctx, index) {
+                              final expense = displayedExpenses[index];
+                              
+                              final payerName = cloudMembers
+                                  .firstWhere((m) => m.id == expense.payerId, orElse: () => Member(id: '', name: '?'))
+                                  .name;
+
+                              final catData = categories[expense.category] ?? categories['other']!;
+
+                              return Dismissible(
+                                key: Key(expense.id),
+                                direction: DismissDirection.endToStart,
+                                background: Container(
+                                  color: Colors.red.withOpacity(0.8),
+                                  alignment: Alignment.centerRight,
+                                  padding: const EdgeInsets.only(right: 20),
+                                  child: const Icon(Icons.delete_forever, color: Colors.white),
+                                ),
+                                onDismissed: (direction) async {
+                                  // USUWANIE WYDATKU Z CHMURY
+                                  final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
+                                  final currentDoc = await docRef.get();
+                                  final currentData = currentDoc.data()?['expensesData'] as List<dynamic>? ?? [];
+                                  
+                                  // Tworzymy nową listę bez usuniętego elementu
+                                  final updatedList = currentData.where((e) => e['id'] != expense.id).toList();
+                                  
+                                  await docRef.update({'expensesData': updatedList});
+
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Wydatek usunięty z chmury')),
+                                    );
+                                  }
+                                },
+                                child: ListTile(
+                                  leading: CircleAvatar(
+                                    backgroundColor: (catData['color'] as Color).withOpacity(0.2),
+                                    child: Icon(catData['icon'] as IconData, color: catData['color'] as Color),
+                                  ),
+                                  title: Text(expense.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  subtitle: Text('Płacił: $payerName'),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (expense.receiptPath != null)
+                                        IconButton(
+                                          icon: const Icon(Icons.receipt_long, color: Colors.blueGrey),
+                                          onPressed: () => _showReceiptDialog(expense.receiptPath!),
+                                        ),
+                                      Text(
+                                        '${expense.amount.toStringAsFixed(2)} zł',
+                                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                      ),
+                                    ],
+                                  ),
+                                  onTap: () {
+                                    _showAddExpenseSheet(existingExpense: expense);
+                                  },
+                                ),
                               );
                             },
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: (catData['color'] as Color).withOpacity(0.2),
-                                child: Icon(catData['icon'] as IconData, color: catData['color'] as Color),
-                              ),
-                              title: Text(expense.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                              subtitle: Text('Płacił: $payerName'),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min, // Żeby nie rozepchało wiersza
-                                children: [
-                                  if (expense.receiptPath != null)
-                                    IconButton(
-                                      icon: const Icon(Icons.receipt, color: Colors.blueGrey),
-                                      onPressed: () => _showReceiptDialog(expense.receiptPath!),
-                                    ),
-                                  Text(
-                                    '${expense.amount.toStringAsFixed(2)} zł',
-                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                  ),
-                                ],
-                              ),
-                              onTap: () {
-                                _showAddExpenseSheet(existingExpense: expense);
-                              },
-                            ),
-                          );
-                        },
-                      ),
-          ),
-        ],
+                          ),
+              ),
+            ],
+          );
+        },
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showAddExpenseSheet(),
@@ -524,13 +565,3 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     );
   }
 }
-
-// Mapa: klucz kategorii -> Ikona i Kolor
-final Map<String, Map<String, dynamic>> categories = {
-  'food': {'icon': Icons.fastfood, 'label': 'Jedzenie', 'color': Colors.orange},
-  'transport': {'icon': Icons.directions_car, 'label': 'Transport', 'color': Colors.blue},
-  'home': {'icon': Icons.home, 'label': 'Nocleg', 'color': Colors.purple},
-  'entertainment': {'icon': Icons.movie, 'label': 'Rozrywka', 'color': Colors.pink},
-  'shopping': {'icon': Icons.shopping_bag, 'label': 'Zakupy', 'color': Colors.green},
-  'other': {'icon': Icons.more_horiz, 'label': 'Inne', 'color': Colors.grey},
-};
