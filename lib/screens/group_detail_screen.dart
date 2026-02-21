@@ -1,4 +1,3 @@
-// plik: lib/screens/group_detail_screen.dart
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -19,25 +18,20 @@ class GroupDetailScreen extends StatefulWidget {
 }
 
 class _GroupDetailScreenState extends State<GroupDetailScreen> {
-  // --- ZMIENNE STANU ---
   final _memberController = TextEditingController();
   final _expenseTitleController = TextEditingController();
   final _expenseAmountController = TextEditingController();
 
-  // Zmienne do wyszukiwania
   bool _isSearching = false;
   String _searchQuery = "";
 
-  // Zmienne do formularza wydatku
   String? _selectedPayerId;
   List<String> _selectedBeneficiaries = [];
   String _selectedCategory = 'other';
 
-  // Zmienne do zdjęć
   final ImagePicker _picker = ImagePicker();
   String? _selectedReceiptPath;
 
-  // Mapa kategorii
   final Map<String, Map<String, dynamic>> categories = {
     'food': {'label': 'Jedzenie', 'icon': Icons.restaurant, 'color': Colors.orange},
     'transport': {'label': 'Transport', 'icon': Icons.directions_car, 'color': Colors.blue},
@@ -47,23 +41,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     'other': {'label': 'Inne', 'icon': Icons.category, 'color': Colors.grey},
   };
 
-  // --- FUNKCJE ---
-
-  // 1. Robienie zdjęcia
   Future<void> _pickImage(ImageSource source, StateSetter setModalState) async {
     try {
       final XFile? pickedFile = await _picker.pickImage(source: source, imageQuality: 50);
       if (pickedFile != null) {
-        setModalState(() {
-          _selectedReceiptPath = pickedFile.path;
-        });
+        setModalState(() { _selectedReceiptPath = pickedFile.path; });
       }
     } catch (e) {
       debugPrint("Błąd zdjęcia: $e");
     }
   }
 
-  // 2. Podgląd dużego zdjęcia
   void _showReceiptDialog(String path) {
     showDialog(
       context: context,
@@ -85,27 +73,19 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     );
   }
 
-  // 3. Zapis osoby do Firestore
   void _addMember() {
     final name = _memberController.text.trim();
     if (name.isNotEmpty) {
       final newMember = {'id': DateTime.now().toString(), 'name': name};
-
-      // Zapis do chmury (Tablica membersData)
       FirebaseFirestore.instance.collection('groups').doc(widget.group.id).update({
         'membersData': FieldValue.arrayUnion([newMember])
       });
-
       _memberController.clear();
       Navigator.of(context).pop();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Dodano osobę: $name')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Dodano osobę: $name')));
     }
   }
 
-  // 4. Okno dodawania osoby
   void _showAddMemberDialog() {
     showDialog(
       context: context,
@@ -117,20 +97,99 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           autofocus: true,
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Anuluj'),
-          ),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Anuluj')),
+          ElevatedButton(onPressed: _addMember, child: const Text('Dodaj')),
+        ],
+      ),
+    );
+  }
+
+  // --- NOWE FUNKCJE: EDYCJA I USUWANIE UCZESTNIKA ---
+  void _editMember(Member member) {
+    final editController = TextEditingController(text: member.name);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edytuj uczestnika'),
+        content: TextField(
+          controller: editController,
+          decoration: const InputDecoration(labelText: 'Zmień imię'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Anuluj')),
           ElevatedButton(
-            onPressed: _addMember,
-            child: const Text('Dodaj'),
+            onPressed: () async {
+              final newName = editController.text.trim();
+              if (newName.isNotEmpty && newName != member.name) {
+                final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
+                final doc = await docRef.get();
+                final currentData = doc.data()?['membersData'] as List<dynamic>? ?? [];
+                
+                // Podmieniamy imię osoby w tablicy
+                final updatedList = currentData.map((m) {
+                  return m['id'] == member.id ? {'id': member.id, 'name': newName} : m;
+                }).toList();
+                
+                await docRef.update({'membersData': updatedList});
+              }
+              if (mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Zapisz'),
           ),
         ],
       ),
     );
   }
 
-  // 5. Zapis wydatku do Firestore (Nowy lub Edycja)
+  Future<void> _deleteMember(Member member) async {
+    // 1. Sprawdzamy, czy osoba nie jest połączona z żadnym wydatkiem
+    final hasExpenses = widget.group.expenses.any((e) => 
+        e.payerId == member.id || e.beneficiaryIds.contains(member.id));
+        
+    if (hasExpenses) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nie można usunąć uczestnika, który bierze udział w wydatkach!'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // 2. Potwierdzenie usunięcia
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Usuń uczestnika'),
+        content: Text('Czy na pewno chcesz usunąć osobę: ${member.name}?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Anuluj')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Usuń'),
+          ),
+        ],
+      ),
+    );
+
+    // 3. Wyrzucamy z bazy
+    if (confirm == true) {
+      final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
+      final doc = await docRef.get();
+      final currentData = doc.data()?['membersData'] as List<dynamic>? ?? [];
+      
+      final updatedList = currentData.where((m) => m['id'] != member.id).toList();
+      
+      await docRef.update({
+        'membersData': updatedList,
+        'memberIds': FieldValue.arrayRemove([member.id]) // Usuwamy też ewentualny dostęp konta
+      });
+    }
+  }
+  // ---------------------------------------------------
+
   Future<void> _saveExpense({String? existingId}) async {
     final title = _expenseTitleController.text.trim();
     final amount = double.tryParse(_expenseAmountController.text) ?? 0;
@@ -142,7 +201,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       return;
     }
 
-    // Mapa wydatku dla bazy Firebase
     final expenseMap = {
       'id': existingId ?? DateTime.now().toString(),
       'title': title,
@@ -157,12 +215,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
 
     if (existingId == null) {
-      // NOWY WYDATEK - szybkie dodanie do tablicy
       await docRef.update({
         'expensesData': FieldValue.arrayUnion([expenseMap])
       });
     } else {
-      // EDYCJA WYDATKU - pobieramy starą listę, podmieniamy ten wydatek i zapisujemy
       final doc = await docRef.get();
       final currentData = doc.data()?['expensesData'] as List<dynamic>? ?? [];
       final updatedList = currentData.map((e) {
@@ -171,18 +227,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       await docRef.update({'expensesData': updatedList});
     }
 
-    // Resetowanie pól po zapisie
     _expenseTitleController.clear();
     _expenseAmountController.clear();
     _selectedReceiptPath = null;
     
-    // Sprawdzamy czy widget jest jeszcze zbudowany zanim zamkniemy okno
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
+    if (mounted) Navigator.of(context).pop();
   }
 
-  // 6. Formularz Wydatku (Wysuwany z dołu)
   void _showAddExpenseSheet({Expense? existingExpense}) {
     if (widget.group.members.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -238,7 +289,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                     ),
                     const SizedBox(height: 15),
 
-                    // Wybór Kategorii
                     DropdownButtonFormField<String>(
                       value: _selectedCategory,
                       decoration: const InputDecoration(labelText: 'Kategoria'),
@@ -255,14 +305,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                         );
                       }).toList(),
                       onChanged: (val) {
-                        setModalState(() {
-                          _selectedCategory = val!;
-                        });
+                        setModalState(() { _selectedCategory = val!; });
                       },
                     ),
                     const SizedBox(height: 15),
                     
-                    // --- ZDJĘCIE PARAGONU ---
                     const Text("Paragon (opcjonalnie):", style: TextStyle(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 10),
                     Row(
@@ -313,7 +360,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                     ),
                     const SizedBox(height: 15),
                     
-                    // Wybór płatnika
                     DropdownButtonFormField<String>(
                       value: _selectedPayerId,
                       decoration: const InputDecoration(labelText: 'Kto płacił?'),
@@ -326,7 +372,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                     ),
                     const SizedBox(height: 15),
 
-                    // Dla kogo?
                     const Text('Dla kogo (kto z tego korzystał):', style: TextStyle(fontWeight: FontWeight.bold)),
                     ...widget.group.members.map((m) {
                       return CheckboxListTile(
@@ -359,27 +404,24 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     );
   }
 
-  // --- BUDOWA EKRANU Z CHMURĄ ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.black), 
+        // USUNIĘTO sztywne "color: Colors.black" z AppBar, żeby działało w Dark Mode
         title: _isSearching
             ? TextField(
                 autofocus: true,
-                cursorColor: Colors.black, // Czarny kursor i tekst (wyszukiwarka)
-                style: const TextStyle(color: Colors.black, fontSize: 18),
+                style: const TextStyle(fontSize: 18), 
                 decoration: const InputDecoration(
                   hintText: 'Szukaj wydatku...',
-                  hintStyle: TextStyle(color: Colors.black54),
                   border: InputBorder.none,
                 ),
                 onChanged: (value) {
                   setState(() { _searchQuery = value; });
                 },
               )
-            : Text(widget.group.name, style: const TextStyle(color: Colors.black)),
+            : Text(widget.group.name),
         actions: [
           IconButton(
             icon: const Icon(Icons.pie_chart),
@@ -412,7 +454,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         ],
       ),
       
-      // STREAM BUILDER - Odświeża ekran automatycznie, gdy w chmurze coś się zmieni
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance.collection('groups').doc(widget.group.id).snapshots(),
         builder: (context, snapshot) {
@@ -426,11 +467,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
           final data = snapshot.data!.data() as Map<String, dynamic>;
           
-          // PARSOWANIE UCZESTNIKÓW Z CHMURY
           final rawMembers = data['membersData'] as List<dynamic>? ?? [];
           final cloudMembers = rawMembers.map((m) => Member(id: m['id'], name: m['name'])).toList();
           
-          // PARSOWANIE WYDATKÓW Z CHMURY
           final rawExpenses = data['expensesData'] as List<dynamic>? ?? [];
           final cloudExpenses = rawExpenses.map((e) {
             return Expense(
@@ -445,20 +484,18 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             );
           }).toList();
 
-          // AKTUALIZACJA OBIEKTU GROUP - Żeby statystyki (SettlementScreen) miały aktualne dane
           widget.group.members = cloudMembers;
           widget.group.expenses = cloudExpenses;
 
-          // FILTROWANIE WYDATKÓW (Wyszukiwarka)
           final displayedExpenses = cloudExpenses.where((expense) {
             final searchLower = _searchQuery.toLowerCase();
             final titleLower = expense.title.toLowerCase();
             return titleLower.contains(searchLower) || expense.category.contains(searchLower);
-          }).toList().reversed.toList(); // reversed daje najnowsze na górze
+          }).toList().reversed.toList(); 
 
           return Column(
             children: [
-              // PASEK Z UCZESTNIKAMI
+              // PASEK Z UCZESTNIKAMI (Teraz z edycją i usuwaniem)
               Container(
                 height: 80,
                 color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.3),
@@ -471,9 +508,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                       final member = cloudMembers[index];
                       return Padding(
                         padding: const EdgeInsets.all(8.0),
-                        child: Chip(
-                          avatar: CircleAvatar(child: Text(member.name.isNotEmpty ? member.name[0] : '?')),
+                        // ZAMIANA: Chip -> InputChip (pozwala na interakcję i ma krzyżyk do usunięcia)
+                        child: InputChip(
+                          avatar: CircleAvatar(child: Text(member.name.isNotEmpty ? member.name[0].toUpperCase() : '?')),
                           label: Text(member.name),
+                          onPressed: () => _editMember(member), // Kliknięcie -> Edycja
+                          onDeleted: () => _deleteMember(member), // Kliknięcie w 'X' -> Usuwanie
                         ),
                       );
                     },
@@ -508,12 +548,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                   child: const Icon(Icons.delete_forever, color: Colors.white),
                                 ),
                                 onDismissed: (direction) async {
-                                  // USUWANIE WYDATKU Z CHMURY
                                   final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
                                   final currentDoc = await docRef.get();
                                   final currentData = currentDoc.data()?['expensesData'] as List<dynamic>? ?? [];
                                   
-                                  // Tworzymy nową listę bez usuniętego elementu
                                   final updatedList = currentData.where((e) => e['id'] != expense.id).toList();
                                   
                                   await docRef.update({'expensesData': updatedList});

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // Użytkownik
-import 'package:cloud_firestore/cloud_firestore.dart'; // Baza danych
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/group.dart';
-import '../models/member.dart';
 import 'group_detail_screen.dart';
+import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -13,21 +13,23 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Pobieramy obecnego użytkownika (wiemy, że jest, bo przeszliśmy logowanie)
   final currentUser = FirebaseAuth.instance.currentUser!;
 
   void _addNewGroup(String name) {
     if (name.isEmpty) return;
 
-    // TWORZENIE GRUPY W CHMURZE (Firestore)
+    final myName = currentUser.displayName != null && currentUser.displayName!.isNotEmpty 
+        ? currentUser.displayName! 
+        : 'Ja';
+
     FirebaseFirestore.instance.collection('groups').add({
       'name': name,
-      'ownerId': currentUser.uid, // Zapisujemy, kto założył
+      'ownerId': currentUser.uid,
       'created': Timestamp.now(),
-      // Lista osób, które mają dostęp (na start tylko Ty)
       'memberIds': [currentUser.uid], 
-      // Na początku lista wydatków i członków (imiona) jest pusta
-      'membersData': [], 
+      'membersData': [
+        {'id': currentUser.uid, 'name': myName}
+      ], 
       'expensesData': [],
     });
   }
@@ -60,28 +62,21 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Funkcja pomocnicza: Zamienia "brzydkie" dane z chmury na nasz obiekt Group
-  // (To tymczasowe rozwiązanie, żeby nie psuć reszty aplikacji)
   Group _mapFirestoreToGroup(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
     
-    // Firebase przechowuje daty jako Timestamp. Musimy to zamienić na DateTime.
-    // Jeśli z jakiegoś powodu daty nie ma w bazie, dajemy dzisiejszą jako zabezpieczenie.
     DateTime parsedDate = DateTime.now();
     if (data['created'] != null) {
       parsedDate = (data['created'] as Timestamp).toDate();
     }
 
-    // Tworzymy grupę "w locie"
-    final group = Group(
+    return Group(
       id: doc.id, 
       name: data['name'] ?? 'Bez nazwy',
-      createdAt: parsedDate, // <--- DODANY BRAKUJĄCY PARAMETR
+      createdAt: parsedDate,
       members: [], 
       expenses: [], 
     );
-    
-    return group;
   }
 
   @override
@@ -91,18 +86,20 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Twoje Wyjazdy 🌍'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () => FirebaseAuth.instance.signOut(), // Wylogowanie
+            icon: const Icon(Icons.settings),
+            tooltip: 'Ustawienia',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (ctx) => const SettingsScreen()),
+              );
+            },
           ),
         ],
       ),
-      // NASŁUCHIWANIE DANYCH Z CHMURY
       body: StreamBuilder<QuerySnapshot>(
-        // Pytanie do bazy: "Daj mi grupy, gdzie jestem na liście uczestników"
         stream: FirebaseFirestore.instance
             .collection('groups')
             .where('memberIds', arrayContains: currentUser.uid)
-            // orderBy('created', descending: true) // Najnowsze na górze
             .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -127,6 +124,16 @@ class _HomeScreenState extends State<HomeScreen> {
           }
 
           final docs = snapshot.data!.docs;
+          
+          // Sortujemy wyjazdy (najnowsze na górze)
+          docs.sort((a, b) {
+            final aData = a.data() as Map<String, dynamic>;
+            final bData = b.data() as Map<String, dynamic>;
+            final aTime = aData['created'] as Timestamp?;
+            final bTime = bData['created'] as Timestamp?;
+            if (aTime == null || bTime == null) return 0;
+            return bTime.compareTo(aTime);
+          });
 
           return ListView.builder(
             itemCount: docs.length,
@@ -135,32 +142,63 @@ class _HomeScreenState extends State<HomeScreen> {
               final groupDoc = docs[index];
               final groupData = groupDoc.data() as Map<String, dynamic>;
               
-              return Card(
-                elevation: 3,
-                margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 5),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    child: Text(
-                      (groupData['name'] as String).isNotEmpty ? (groupData['name'] as String)[0].toUpperCase() : '?',
-                      style: const TextStyle(color: Colors.white),
+              return Dismissible(
+                key: Key(groupDoc.id),
+                direction: DismissDirection.endToStart,
+                background: Container(
+                  color: Colors.red.withOpacity(0.8),
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 20),
+                  child: const Icon(Icons.delete_forever, color: Colors.white, size: 30),
+                ),
+                // Okienko potwierdzenia usunięcia wyjazdu
+                confirmDismiss: (direction) async {
+                  return await showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Usuń wyjazd'),
+                      content: const Text('Czy na pewno chcesz usunąć ten wyjazd ze wszystkimi wydatkami? Tej akcji nie można cofnąć.'),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Anuluj')),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                          onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text('Usuń'),
+                        ),
+                      ],
                     ),
-                  ),
-                  title: Text(
-                    groupData['name'], 
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-                  ),
-                  subtitle: Text("ID: ...${groupDoc.id.substring(groupDoc.id.length - 4)}"), // Pokazuje końcówkę ID
-                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                  onTap: () {
-                    // Konwertujemy na obiekt Group i wchodzimy do środka
-                    final groupObject = _mapFirestoreToGroup(groupDoc);
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (ctx) => GroupDetailScreen(group: groupObject),
+                  );
+                },
+                onDismissed: (direction) {
+                  // Usuwamy wyjazd z bazy w chmurze
+                  FirebaseFirestore.instance.collection('groups').doc(groupDoc.id).delete();
+                },
+                child: Card(
+                  elevation: 3,
+                  margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 5),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      child: Text(
+                        (groupData['name'] as String).isNotEmpty ? (groupData['name'] as String)[0].toUpperCase() : '?',
+                        style: const TextStyle(color: Colors.white),
                       ),
-                    );
-                  },
+                    ),
+                    title: Text(
+                      groupData['name'], 
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                    ),
+                    subtitle: Text("ID: ...${groupDoc.id.substring(groupDoc.id.length - 4)}"),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                    onTap: () {
+                      final groupObject = _mapFirestoreToGroup(groupDoc);
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (ctx) => GroupDetailScreen(group: groupObject),
+                        ),
+                      );
+                    },
+                  ),
                 ),
               );
             },
