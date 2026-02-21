@@ -42,6 +42,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     'entertainment': {'label': 'Rozrywka', 'icon': Icons.movie, 'color': Colors.pink},
     'shopping': {'label': 'Zakupy', 'icon': Icons.shopping_cart, 'color': Colors.green},
     'other': {'label': 'Inne', 'icon': Icons.category, 'color': Colors.grey},
+    'repayment': {'label': 'Spłata długu', 'icon': Icons.handshake, 'color': Colors.teal},
   };
 
   // --- POMOCNICZA FUNKCJA DO DNI TYGODNIA ---
