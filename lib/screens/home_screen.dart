@@ -22,7 +22,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return String.fromCharCodes(Iterable.generate(6, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))));
   }
 
-  // --- ZMIANA: Dodano walutę jako parametr ---
   void _addNewGroup(String name, String currency) {
     if (name.isEmpty) return;
 
@@ -34,7 +33,7 @@ class _HomeScreenState extends State<HomeScreen> {
       'ownerId': currentUser.uid,
       'created': Timestamp.now(),
       'inviteCode': _generateInviteCode(),
-      'currency': currency, // <--- ZAPISUJEMY WALUTĘ DO BAZY
+      'currency': currency,
       'memberIds': [currentUser.uid], 
       'membersData': [{'id': currentUser.uid, 'name': myName}], 
       'expensesData': [],
@@ -87,7 +86,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _showAddGroupDialog() {
     final nameController = TextEditingController();
-    String selectedCurrency = 'zł'; // Domyślna waluta
+    String selectedCurrency = 'zł';
 
     showDialog(
       context: context,
@@ -104,7 +103,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   autofocus: true,
                 ),
                 const SizedBox(height: 15),
-                // --- NOWOŚĆ: Wybór waluty ---
                 DropdownButtonFormField<String>(
                   value: selectedCurrency,
                   decoration: const InputDecoration(labelText: 'Waluta rozliczeń'),
@@ -157,7 +155,7 @@ class _HomeScreenState extends State<HomeScreen> {
       name: data['name'] ?? 'Bez nazwy',
       createdAt: parsedDate,
       inviteCode: data['inviteCode'],
-      currency: data['currency'] ?? 'zł', // <--- POBIERAMY WALUTĘ
+      currency: data['currency'] ?? 'zł',
       members: [], 
       expenses: [], 
     );
@@ -167,8 +165,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Twoje Wyjazdy 🌍'),
-        actions: [IconButton(icon: const Icon(Icons.settings), tooltip: 'Ustawienia', onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => const SettingsScreen())))],
+        centerTitle: true, // Wyśrodkowanie tytułu
+        elevation: 0,
+        title: const Text('Twoje Wyjazdy 🌍', style: TextStyle(fontWeight: FontWeight.bold)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings), 
+            tooltip: 'Ustawienia', 
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => const SettingsScreen()))
+          )
+        ],
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance.collection('groups').where('memberIds', arrayContains: currentUser.uid).snapshots(),
@@ -188,28 +194,124 @@ class _HomeScreenState extends State<HomeScreen> {
 
           return ListView.builder(
             itemCount: docs.length,
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), // Większe odstępy po bokach
             itemBuilder: (ctx, index) {
               final groupDoc = docs[index];
               final groupData = groupDoc.data() as Map<String, dynamic>;
               
+              final String name = groupData['name'] ?? 'Bez nazwy';
+              final String currency = groupData['currency'] ?? 'zł';
+              final Timestamp? createdTs = groupData['created'] as Timestamp?;
+              final int memberCount = (groupData['memberIds'] as List?)?.length ?? 1;
+
+              // Formatowanie daty utworzenia
+              String dateStr = '';
+              if (createdTs != null) {
+                final date = createdTs.toDate();
+                dateStr = "${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}";
+              }
+
               return Dismissible(
-                key: Key(groupDoc.id), direction: DismissDirection.endToStart, background: Container(color: Colors.red.withOpacity(0.8), alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete_forever, color: Colors.white, size: 30)),
+                key: Key(groupDoc.id), 
+                direction: DismissDirection.endToStart, 
+                background: Container(
+                  margin: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(color: Colors.red.withOpacity(0.8), borderRadius: BorderRadius.circular(16)), 
+                  alignment: Alignment.centerRight, 
+                  padding: const EdgeInsets.only(right: 20), 
+                  child: const Icon(Icons.delete_forever, color: Colors.white, size: 30)
+                ),
                 confirmDismiss: (direction) async {
                   return await showDialog(context: context, builder: (ctx) => AlertDialog(title: const Text('Usuń wyjazd'), content: const Text('Czy na pewno chcesz usunąć ten wyjazd ze wszystkimi wydatkami? Tej akcji nie można cofnąć.'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Anuluj')), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white), onPressed: () => Navigator.pop(ctx, true), child: const Text('Usuń'))]));
                 },
                 onDismissed: (direction) { FirebaseFirestore.instance.collection('groups').doc(groupDoc.id).delete(); },
+                
+                // --- NOWY, PIĘKNY WYGLĄD KARTY WYJAZDU ---
                 child: Card(
-                  elevation: 3, margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 5),
-                  child: ListTile(
-                    leading: CircleAvatar(backgroundColor: Theme.of(context).colorScheme.primary, child: Text((groupData['name'] as String).isNotEmpty ? (groupData['name'] as String)[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white))),
-                    title: Text(groupData['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                    subtitle: Text("ID: ...${groupDoc.id.substring(groupDoc.id.length - 4)}"),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  elevation: 2, 
+                  margin: const EdgeInsets.symmetric(vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
                     onTap: () {
                       final groupObject = _mapFirestoreToGroup(groupDoc);
                       Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => GroupDetailScreen(group: groupObject)));
                     },
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        children: [
+                          // Nowoczesny "zaokrąglony kwadrat" zamiast kółka
+                          Container(
+                            width: 54,
+                            height: 54,
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Center(
+                              child: Text(
+                                name.isNotEmpty ? name[0].toUpperCase() : '?',
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          
+                          // Główna zawartość
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 8),
+                                
+                                // Nowe, użyteczne informacje (Data, Uczestnicy, Waluta)
+                                Row(
+                                  children: [
+                                    const Icon(Icons.calendar_today, size: 14, color: Colors.grey),
+                                    const SizedBox(width: 4),
+                                    Text(dateStr, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                                    
+                                    const SizedBox(width: 12),
+                                    
+                                    const Icon(Icons.group, size: 14, color: Colors.grey),
+                                    const SizedBox(width: 4),
+                                    Text('$memberCount', style: const TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.bold)),
+                                    
+                                    const Spacer(),
+                                    
+                                    // Pigułka z walutą
+                                    Container(
+                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                       decoration: BoxDecoration(
+                                         color: Theme.of(context).colorScheme.surfaceContainerHighest, 
+                                         borderRadius: BorderRadius.circular(6)
+                                       ),
+                                       child: Text(
+                                         currency, 
+                                         style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)
+                                       ),
+                                    )
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.chevron_right, color: Colors.grey),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               );

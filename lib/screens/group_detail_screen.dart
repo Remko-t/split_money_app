@@ -27,6 +27,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   bool _isSearching = false;
   String _searchQuery = "";
 
+  String _sortBy = 'newest'; 
+  bool _filterMyExpenses = false;
+  String _filterCategory = 'all';
+
   String? _selectedPayerId;
   List<String> _selectedBeneficiaries = [];
   String _selectedCategory = 'other';
@@ -117,6 +121,209 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     }
   }
 
+  // --- POPRAWIONE: ŁĄCZENIE PROFILU (Mergowanie) ---
+  Future<void> _claimProfile(Member localMember) async {
+    final myUid = FirebaseAuth.instance.currentUser!.uid;
+    final myName = FirebaseAuth.instance.currentUser?.displayName ?? 'Ja';
+
+    if (localMember.id == myUid) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('To Twój profil?'),
+        content: Text('Czy chcesz przypisać profil "${localMember.name}" do swojego konta?\n\nWydatki zostaną zachowane, a profil zaktualizuje się na Twoje dane.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Anuluj')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Tak, to ja!'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
+      final doc = await docRef.get();
+      final data = doc.data() ?? {};
+
+      final currentExpenses = data['expensesData'] as List<dynamic>? ?? [];
+      List<dynamic> currentMembers = data['membersData'] as List<dynamic>? ?? [];
+
+      // 1. Aktualizujemy wszystkie wydatki, podmieniając stare ID na nowe (moje)
+      final updatedExpenses = currentExpenses.map((e) {
+        final expenseMap = Map<String, dynamic>.from(e);
+        if (expenseMap['payerId'] == localMember.id) {
+          expenseMap['payerId'] = myUid;
+        }
+        final beneficiaries = List<String>.from(expenseMap['beneficiaryIds'] ?? []);
+        if (beneficiaries.contains(localMember.id)) {
+          beneficiaries.remove(localMember.id);
+          if (!beneficiaries.contains(myUid)) beneficiaries.add(myUid);
+          expenseMap['beneficiaryIds'] = beneficiaries;
+        }
+        return expenseMap;
+      }).toList();
+
+      // 2. Filtrujemy listę osób: Usuwamy stary profil oraz profil "podwójny", by zostawić tylko jeden, właściwy
+      final filteredMembers = currentMembers.where((m) => m['id'] != localMember.id && m['id'] != myUid).toList();
+      
+      // Dodajemy JEDEN profil, który zawiera nasze prawdziwe ID i prawdziwe Imię
+      filteredMembers.add({'id': myUid, 'name': myName});
+
+      await docRef.update({
+        'expensesData': updatedExpenses,
+        'membersData': filteredMembers,
+      });
+
+      _logActivity('połączył(a) swój profil z: ${localMember.name}');
+      
+      if (mounted) {
+        // Zamykamy dolne okienko zarządzania, by aplikacja płynnie przebudowała widok bez błędów!
+        Navigator.pop(context); 
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profil zaktualizowany i połączony! 🎉')));
+      }
+    }
+  }
+
+  void _showManageMembersSheet() {
+    final myUid = FirebaseAuth.instance.currentUser!.uid;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) {
+        return StreamBuilder<DocumentSnapshot>(
+          stream: FirebaseFirestore.instance.collection('groups').doc(widget.group.id).snapshots(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData || snapshot.data?.data() == null) return const SizedBox.shrink();
+            final data = snapshot.data!.data() as Map<String, dynamic>;
+            final rawMembers = data['membersData'] as List<dynamic>? ?? [];
+            final currentMembers = rawMembers.map((m) => Member(id: m['id'], name: m['name'])).toList();
+
+            return Padding(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, top: 20, left: 16, right: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Zarządzaj uczestnikami', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: currentMembers.length,
+                    itemBuilder: (context, index) {
+                      final m = currentMembers[index];
+                      final isMe = m.id == myUid;
+
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: Colors.primaries[index % Colors.primaries.length].withOpacity(0.8),
+                          child: Text(m.name.isNotEmpty ? m.name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
+                        ),
+                        title: Row(
+                          children: [
+                            Text(m.name, style: const TextStyle(fontWeight: FontWeight.w500)),
+                            if (isMe) 
+                              const Padding(padding: EdgeInsets.only(left: 8.0), child: Text('(Ty)', style: TextStyle(color: Colors.grey, fontSize: 12)))
+                          ],
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (!isMe)
+                              IconButton(
+                                icon: const Icon(Icons.link, color: Colors.teal),
+                                tooltip: 'Przypisz ten profil do siebie',
+                                onPressed: () => _claimProfile(m),
+                              ),
+                            IconButton(icon: const Icon(Icons.edit, color: Colors.blueGrey), onPressed: () => _editMember(m)),
+                            IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: () => _deleteMember(m)),
+                          ]
+                        )
+                      );
+                    }
+                  ),
+                  const SizedBox(height: 10),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showAddMemberDialog();
+                    },
+                    icon: const Icon(Icons.person_add),
+                    label: const Text('Dodaj nową osobę lokalnie'),
+                    style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
+                  ),
+                  const SizedBox(height: 20),
+                ]
+              )
+            );
+          }
+        );
+      }
+    );
+  }
+
+  Widget _buildStackedAvatars(List<Member> members) {
+    if (members.isEmpty) return const Text("Brak uczestników", style: TextStyle(color: Colors.grey));
+    
+    // Zwiększony limit: Pokazujemy aż do 8 okrągłych avatarów, zanim wyświetlimy "+X"
+    int maxAvatars = 8; 
+    int displayCount = members.length > maxAvatars ? maxAvatars - 1 : members.length;
+    int remaining = members.length - displayCount;
+
+    List<Widget> stackChildren = [];
+    for (int i = 0; i < displayCount; i++) {
+      stackChildren.add(
+        Positioned(
+          left: i * 26.0,
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 2),
+            ),
+            child: CircleAvatar(
+              radius: 14,
+              backgroundColor: Colors.primaries[i % Colors.primaries.length].withOpacity(0.9),
+              child: Text(
+                members[i].name.isNotEmpty ? members[i].name[0].toUpperCase() : '?', 
+                style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (remaining > 0) {
+      stackChildren.add(
+        Positioned(
+          left: displayCount * 26.0,
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 2),
+            ),
+            child: CircleAvatar(
+              radius: 14,
+              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: Text('+$remaining', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: (displayCount * 26.0) + (remaining > 0 ? 32.0 : 32.0),
+      height: 32,
+      child: Stack(children: stackChildren),
+    );
+  }
+
   Future<void> _saveExpense({String? existingId}) async {
     final title = _expenseTitleController.text.trim();
     final amount = double.tryParse(_expenseAmountController.text) ?? 0;
@@ -146,20 +353,38 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   void _showAddExpenseSheet({Expense? existingExpense}) {
-    if (widget.group.members.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Najpierw dodaj uczestników!')));
+    // --- OCHRONA PRZED BŁĘDAMI Z DROPDOWNEM ---
+    // Filtrujemy użytkowników tak, by każdy miał unikalne ID.
+    final uniqueMembers = <Member>[];
+    final seenIds = <String>{};
+    for (var m in widget.group.members) {
+      if (!seenIds.contains(m.id)) {
+        seenIds.add(m.id);
+        uniqueMembers.add(m);
+      }
+    }
+
+    if (uniqueMembers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Brak uczestników!')));
       return;
     }
+
     final isEditing = existingExpense != null;
     if (isEditing) {
       _expenseTitleController.text = existingExpense.title; _expenseAmountController.text = existingExpense.amount.toString();
       _selectedPayerId = existingExpense.payerId; _selectedBeneficiaries = List.from(existingExpense.beneficiaryIds);
       _selectedCategory = existingExpense.category; _selectedReceiptPath = existingExpense.receiptPath; _selectedExpenseDate = existingExpense.date;
+      
+      // Jeżeli z jakiegoś powodu ID płatnika już nie istnieje w bazie (został połączony), zabezpieczamy kod:
+      if (!uniqueMembers.any((m) => m.id == _selectedPayerId)) {
+        _selectedPayerId = uniqueMembers.first.id;
+      }
     } else {
-      _expenseTitleController.clear(); _expenseAmountController.clear(); _selectedPayerId = widget.group.members.first.id;
-      _selectedBeneficiaries = widget.group.members.map((m) => m.id).toList(); _selectedCategory = 'other';
+      _expenseTitleController.clear(); _expenseAmountController.clear(); _selectedPayerId = uniqueMembers.first.id;
+      _selectedBeneficiaries = uniqueMembers.map((m) => m.id).toList(); _selectedCategory = 'other';
       _selectedReceiptPath = null; _selectedExpenseDate = DateTime.now();
     }
+    
     showModalBottomSheet(
       context: context, isScrollControlled: true,
       builder: (ctx) {
@@ -200,12 +425,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                     const SizedBox(height: 15),
                     DropdownButtonFormField<String>(
                       value: _selectedPayerId, decoration: const InputDecoration(labelText: 'Kto płacił?'),
-                      items: widget.group.members.map((m) => DropdownMenuItem(value: m.id, child: Text(m.name))).toList(),
+                      items: uniqueMembers.map((m) => DropdownMenuItem(value: m.id, child: Text(m.name))).toList(),
                       onChanged: (val) => setModalState(() { _selectedPayerId = val; }),
                     ),
                     const SizedBox(height: 15),
                     const Text('Dla kogo (kto z tego korzystał):', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ...widget.group.members.map((m) {
+                    ...uniqueMembers.map((m) {
                       return CheckboxListTile(title: Text(m.name), value: _selectedBeneficiaries.contains(m.id), onChanged: (bool? checked) { setModalState(() { if (checked == true) _selectedBeneficiaries.add(m.id); else _selectedBeneficiaries.remove(m.id); }); });
                     }),
                     const SizedBox(height: 20),
@@ -236,7 +461,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               )
             : Text(widget.group.name),
         actions: [
-          // 1. UDOSTĘPNIANIE (Niebieski)
           IconButton(
             icon: const Icon(Icons.share, color: Colors.blue),
             tooltip: "Zaproś znajomych",
@@ -252,59 +476,21 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                       const SizedBox(height: 20),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(12)
-                        ),
-                        child: Text(
-                          widget.group.inviteCode ?? 'Brak kodu (stara grupa)',
-                          style: TextStyle(
-                            fontSize: 32, 
-                            fontWeight: FontWeight.bold, 
-                            letterSpacing: 8, 
-                            color: Theme.of(context).colorScheme.onPrimaryContainer
-                          ),
-                        ),
+                        decoration: BoxDecoration(color: Theme.of(context).colorScheme.primaryContainer, borderRadius: BorderRadius.circular(12)),
+                        child: Text(widget.group.inviteCode ?? 'Brak kodu', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 8, color: Theme.of(context).colorScheme.onPrimaryContainer)),
                       ),
                     ],
                   ),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Gotowe'))
-                  ],
+                  actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Gotowe'))],
                 ),
               );
             },
           ),
-          
-          // 2. HISTORIA (Fioletowy)
-          IconButton(
-            icon: const Icon(Icons.history, color: Colors.purple), 
-            tooltip: "Historia Wyjazdu", 
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => HistoryScreen(group: widget.group)))
-          ),
-          
-          // 3. PODSUMOWANIE (Zielony)
-          IconButton(
-            icon: const Icon(Icons.pie_chart, color: Colors.green), 
-            tooltip: "Podsumowanie", 
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => SettlementScreen(group: widget.group)))
-          ),
-          
-          // 4. LUPKA / WYSZUKIWARKA (Pomarańczowy)
-          IconButton(
-            icon: Icon(_isSearching ? Icons.close : Icons.search, color: Colors.orange),
-            onPressed: () => setState(() {
-              if (_isSearching) { _isSearching = false; _searchQuery = ""; } else { _isSearching = true; }
-            }),
-          ),
-          
-          // 5. DODAJ OSOBĘ (Czerwony/Różowy)
+          IconButton(icon: const Icon(Icons.history, color: Colors.purple), tooltip: "Historia", onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => HistoryScreen(group: widget.group)))),
+          IconButton(icon: const Icon(Icons.pie_chart, color: Colors.green), tooltip: "Podsumowanie", onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => SettlementScreen(group: widget.group)))),
+          IconButton(icon: Icon(_isSearching ? Icons.close : Icons.search, color: Colors.orange), onPressed: () => setState(() { if (_isSearching) { _isSearching = false; _searchQuery = ""; } else { _isSearching = true; } })),
           if (!_isSearching)
-            IconButton(
-              icon: const Icon(Icons.person_add_alt, color: Colors.redAccent), 
-              tooltip: 'Dodaj osobę "lokalnie"', 
-              onPressed: _showAddMemberDialog
-            )
+            IconButton(icon: const Icon(Icons.manage_accounts, color: Colors.redAccent), tooltip: 'Zarządzaj uczestnikami', onPressed: _showManageMembersSheet)
         ],
       ),
       
@@ -327,37 +513,100 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             );
           }).toList();
 
-          cloudExpenses.sort((a, b) => b.date.compareTo(a.date));
-
           widget.group.members = cloudMembers;
           widget.group.expenses = cloudExpenses;
 
           final displayedExpenses = cloudExpenses.where((expense) {
-            final searchLower = _searchQuery.toLowerCase();
-            return expense.title.toLowerCase().contains(searchLower) || expense.category.contains(searchLower);
+            if (_searchQuery.isNotEmpty) {
+              final searchLower = _searchQuery.toLowerCase();
+              if (!expense.title.toLowerCase().contains(searchLower) && !expense.category.contains(searchLower)) return false;
+            }
+            if (_filterMyExpenses) {
+              final myId = FirebaseAuth.instance.currentUser?.uid;
+              if (myId != null && expense.payerId != myId && !expense.beneficiaryIds.contains(myId)) return false;
+            }
+            if (_filterCategory != 'all' && expense.category != _filterCategory) return false;
+            return true;
           }).toList(); 
+
+          displayedExpenses.sort((a, b) {
+            if (_sortBy == 'newest') return b.date.compareTo(a.date);
+            if (_sortBy == 'oldest') return a.date.compareTo(b.date);
+            if (_sortBy == 'highest') return b.amount.compareTo(a.amount);
+            if (_sortBy == 'lowest') return a.amount.compareTo(b.amount);
+            return 0;
+          });
 
           return Column(
             children: [
-              Container(
-                height: 80, color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.3),
-                child: cloudMembers.isEmpty 
-                  ? const Center(child: Text("Brak uczestników"))
-                  : ListView.builder(
-                    scrollDirection: Axis.horizontal, itemCount: cloudMembers.length,
-                    itemBuilder: (ctx, index) {
-                      final member = cloudMembers[index];
-                      return Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: InputChip(
-                          avatar: CircleAvatar(child: Text(member.name.isNotEmpty ? member.name[0].toUpperCase() : '?')),
-                          label: Text(member.name),
-                          onPressed: () => _editMember(member),
-                          onDeleted: () => _deleteMember(member),
-                        ),
-                      );
-                    },
+              InkWell(
+                onTap: _showManageMembersSheet,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.2),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.group, color: Colors.blueGrey, size: 20),
+                      const SizedBox(width: 8),
+                      const Text('Uczestnicy: ', style: TextStyle(color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 8),
+                      _buildStackedAvatars(cloudMembers),
+                      const Spacer(),
+                      const Icon(Icons.edit, color: Colors.grey, size: 18),
+                    ],
                   ),
+                ),
+              ),
+              
+              Container(
+                height: 50,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8.0),
+                      child: FilterChip(
+                        label: const Text('Tylko moje'),
+                        selected: _filterMyExpenses,
+                        onSelected: (val) => setState(() => _filterMyExpenses = val),
+                        selectedColor: Theme.of(context).colorScheme.primaryContainer,
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8.0),
+                      child: PopupMenuButton<String>(
+                        initialValue: _sortBy,
+                        onSelected: (val) => setState(() => _sortBy = val),
+                        itemBuilder: (ctx) => const [
+                          PopupMenuItem(value: 'newest', child: Text('🗓️ Najnowsze')),
+                          PopupMenuItem(value: 'oldest', child: Text('🗓️ Najstarsze')),
+                          PopupMenuItem(value: 'highest', child: Text('💰 Najdroższe')),
+                          PopupMenuItem(value: 'lowest', child: Text('🪙 Najtańsze')),
+                        ],
+                        child: Chip(
+                          label: Row(children: [Text(_sortBy == 'newest' ? 'Najnowsze' : _sortBy == 'oldest' ? 'Najstarsze' : _sortBy == 'highest' ? 'Najdroższe' : 'Najtańsze'), const Icon(Icons.arrow_drop_down, size: 18)]),
+                          backgroundColor: _sortBy != 'newest' ? Theme.of(context).colorScheme.primaryContainer : null,
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8.0),
+                      child: PopupMenuButton<String>(
+                        initialValue: _filterCategory,
+                        onSelected: (val) => setState(() => _filterCategory = val),
+                        itemBuilder: (ctx) => [
+                          const PopupMenuItem(value: 'all', child: Text('Wszystkie kategorie')),
+                          ...categories.entries.map((e) => PopupMenuItem(value: e.key, child: Text(e.value['label']))),
+                        ],
+                        child: Chip(
+                          label: Row(children: [Text(_filterCategory == 'all' ? 'Kategoria' : categories[_filterCategory]!['label']), const Icon(Icons.arrow_drop_down, size: 18)]),
+                          backgroundColor: _filterCategory != 'all' ? Theme.of(context).colorScheme.primaryContainer : null,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const Divider(height: 1),
               
@@ -365,21 +614,23 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 child: cloudExpenses.isEmpty
                     ? const Center(child: Text("Brak wydatków. Dodaj pierwszy!"))
                     : displayedExpenses.isEmpty
-                        ? const Center(child: Text("Nie znaleziono pasujących wydatków."))
+                        ? const Center(child: Text("Nie znaleziono wydatków dla tych filtrów."))
                         : ListView.builder(
                             itemCount: displayedExpenses.length,
                             itemBuilder: (ctx, index) {
                               final expense = displayedExpenses[index];
                               
                               bool showDateHeader = false;
-                              if (index == 0) {
-                                showDateHeader = true; 
-                              } else {
-                                final prevExpense = displayedExpenses[index - 1];
-                                if (expense.date.year != prevExpense.date.year ||
-                                    expense.date.month != prevExpense.date.month ||
-                                    expense.date.day != prevExpense.date.day) {
-                                  showDateHeader = true;
+                              if (_sortBy == 'newest' || _sortBy == 'oldest') {
+                                if (index == 0) {
+                                  showDateHeader = true; 
+                                } else {
+                                  final prevExpense = displayedExpenses[index - 1];
+                                  if (expense.date.year != prevExpense.date.year ||
+                                      expense.date.month != prevExpense.date.month ||
+                                      expense.date.day != prevExpense.date.day) {
+                                    showDateHeader = true;
+                                  }
                                 }
                               }
 
