@@ -45,7 +45,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     'repayment': {'label': 'Spłata długu', 'icon': Icons.handshake, 'color': Colors.teal},
   };
 
-  // --- POMOCNICZA FUNKCJA DO DNI TYGODNIA ---
   String _getWeekdayName(int weekday) {
     const days = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota', 'Niedziela'];
     return days[weekday - 1];
@@ -54,110 +53,51 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   Future<void> _logActivity(String message) async {
     final userName = FirebaseAuth.instance.currentUser?.displayName ?? 'Ktoś';
     final fullMessage = "$userName $message";
-
     await FirebaseFirestore.instance.collection('groups').doc(widget.group.id).update({
-      'activitiesData': FieldValue.arrayUnion([{
-        'id': DateTime.now().toString(),
-        'message': fullMessage,
-        'timestamp': Timestamp.now(),
-      }])
+      'activitiesData': FieldValue.arrayUnion([{'id': DateTime.now().toString(), 'message': fullMessage, 'timestamp': Timestamp.now()}])
     });
   }
 
   Future<void> _pickImage(ImageSource source, StateSetter setModalState) async {
     try {
       final XFile? pickedFile = await _picker.pickImage(source: source, imageQuality: 50);
-      if (pickedFile != null) {
-        setModalState(() { _selectedReceiptPath = pickedFile.path; });
-      }
-    } catch (e) {
-      debugPrint("Błąd zdjęcia: $e");
-    }
+      if (pickedFile != null) setModalState(() { _selectedReceiptPath = pickedFile.path; });
+    } catch (e) { debugPrint("Błąd zdjęcia: $e"); }
   }
 
   void _showReceiptDialog(String path) {
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 450),
-              child: Image.file(File(path), fit: BoxFit.contain),
-            ),
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Zamknij"))
-          ],
-        ),
-      ),
-    );
+    showDialog(context: context, builder: (ctx) => Dialog(child: Column(mainAxisSize: MainAxisSize.min, children: [ConstrainedBox(constraints: const BoxConstraints(maxHeight: 450), child: Image.file(File(path), fit: BoxFit.contain)), TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Zamknij"))])));
   }
 
   void _addMember() {
     final name = _memberController.text.trim();
     if (name.isNotEmpty) {
       final newMember = {'id': DateTime.now().toString(), 'name': name};
-      FirebaseFirestore.instance.collection('groups').doc(widget.group.id).update({
-        'membersData': FieldValue.arrayUnion([newMember])
-      });
-      
-      _logActivity('dodał(a) uczestnika: $name');
-
+      FirebaseFirestore.instance.collection('groups').doc(widget.group.id).update({ 'membersData': FieldValue.arrayUnion([newMember]) });
+      _logActivity('dodał(a) uczestnika lokalnego: $name');
       _memberController.clear();
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Dodano osobę: $name')));
     }
   }
 
   void _showAddMemberDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Dodaj Uczestnika'),
-        content: TextField(
-          controller: _memberController,
-          decoration: const InputDecoration(labelText: 'Imię'),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Anuluj')),
-          ElevatedButton(onPressed: _addMember, child: const Text('Dodaj')),
-        ],
-      ),
-    );
+    showDialog(context: context, builder: (ctx) => AlertDialog(title: const Text('Dodaj Uczestnika bez aplikacji'), content: TextField(controller: _memberController, decoration: const InputDecoration(labelText: 'Imię'), autofocus: true), actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Anuluj')), ElevatedButton(onPressed: _addMember, child: const Text('Dodaj'))]));
   }
 
   void _editMember(Member member) {
     final editController = TextEditingController(text: member.name);
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Edytuj uczestnika'),
-        content: TextField(controller: editController, decoration: const InputDecoration(labelText: 'Zmień imię'), autofocus: true),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Anuluj')),
-          ElevatedButton(
-            onPressed: () async {
-              final newName = editController.text.trim();
-              if (newName.isNotEmpty && newName != member.name) {
-                final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
-                final doc = await docRef.get();
-                final currentData = doc.data()?['membersData'] as List<dynamic>? ?? [];
-                
-                final updatedList = currentData.map((m) {
-                  return m['id'] == member.id ? {'id': member.id, 'name': newName} : m;
-                }).toList();
-                
-                await docRef.update({'membersData': updatedList});
-                _logActivity('zmienił(a) imię: ${member.name} ➔ $newName');
-              }
-              if (mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Zapisz'),
-          ),
-        ],
-      ),
-    );
+    showDialog(context: context, builder: (ctx) => AlertDialog(title: const Text('Edytuj uczestnika'), content: TextField(controller: editController, decoration: const InputDecoration(labelText: 'Zmień imię'), autofocus: true), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Anuluj')), ElevatedButton(onPressed: () async {
+      final newName = editController.text.trim();
+      if (newName.isNotEmpty && newName != member.name) {
+        final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
+        final doc = await docRef.get();
+        final currentData = doc.data()?['membersData'] as List<dynamic>? ?? [];
+        final updatedList = currentData.map((m) => m['id'] == member.id ? {'id': member.id, 'name': newName} : m).toList();
+        await docRef.update({'membersData': updatedList});
+        _logActivity('zmienił(a) imię: ${member.name} ➔ $newName');
+      }
+      if (mounted) Navigator.pop(ctx);
+    }, child: const Text('Zapisz'))]));
   }
 
   Future<void> _deleteMember(Member member) async {
@@ -166,29 +106,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nie można usunąć uczestnika, który brał udział w wydatkach!'), backgroundColor: Colors.red));
       return;
     }
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Usuń uczestnika'),
-        content: Text('Czy na pewno chcesz usunąć osobę: ${member.name}?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Anuluj')),
-          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white), onPressed: () => Navigator.pop(ctx, true), child: const Text('Usuń')),
-        ],
-      ),
-    );
-
+    final confirm = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('Usuń uczestnika'), content: Text('Czy na pewno chcesz usunąć osobę: ${member.name}?'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Anuluj')), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white), onPressed: () => Navigator.pop(ctx, true), child: const Text('Usuń'))]));
     if (confirm == true) {
       final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
       final doc = await docRef.get();
       final currentData = doc.data()?['membersData'] as List<dynamic>? ?? [];
       final updatedList = currentData.where((m) => m['id'] != member.id).toList();
-      
-      await docRef.update({
-        'membersData': updatedList,
-        'memberIds': FieldValue.arrayRemove([member.id])
-      });
+      await docRef.update({'membersData': updatedList, 'memberIds': FieldValue.arrayRemove([member.id])});
       _logActivity('usunął/ęła uczestnika: ${member.name}');
     }
   }
@@ -196,25 +120,15 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   Future<void> _saveExpense({String? existingId}) async {
     final title = _expenseTitleController.text.trim();
     final amount = double.tryParse(_expenseAmountController.text) ?? 0;
-
     if (title.isEmpty || amount <= 0 || _selectedPayerId == null || _selectedBeneficiaries.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Wypełnij poprawnie wszystkie pola i wybierz osoby!')));
       return;
     }
-
     final expenseMap = {
-      'id': existingId ?? DateTime.now().toString(),
-      'title': title,
-      'amount': amount,
-      'payerId': _selectedPayerId,
-      'beneficiaryIds': _selectedBeneficiaries,
-      'date': Timestamp.fromDate(_selectedExpenseDate),
-      'category': _selectedCategory,
-      'receiptPath': _selectedReceiptPath,
+      'id': existingId ?? DateTime.now().toString(), 'title': title, 'amount': amount, 'payerId': _selectedPayerId,
+      'beneficiaryIds': _selectedBeneficiaries, 'date': Timestamp.fromDate(_selectedExpenseDate), 'category': _selectedCategory, 'receiptPath': _selectedReceiptPath,
     };
-
     final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
-
     if (existingId == null) {
       await docRef.update({'expensesData': FieldValue.arrayUnion([expenseMap])});
       _logActivity('dodał(a) wydatek: $title (${amount.toStringAsFixed(2)} zł)');
@@ -225,11 +139,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       await docRef.update({'expensesData': updatedList});
       _logActivity('edytował(a) wydatek: $title');
     }
-
     _expenseTitleController.clear();
     _expenseAmountController.clear();
     _selectedReceiptPath = null;
-    
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -238,148 +150,68 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Najpierw dodaj uczestników!')));
       return;
     }
-
     final isEditing = existingExpense != null;
-
     if (isEditing) {
-      _expenseTitleController.text = existingExpense.title;
-      _expenseAmountController.text = existingExpense.amount.toString();
-      _selectedPayerId = existingExpense.payerId;
-      _selectedBeneficiaries = List.from(existingExpense.beneficiaryIds);
-      _selectedCategory = existingExpense.category;
-      _selectedReceiptPath = existingExpense.receiptPath;
-      _selectedExpenseDate = existingExpense.date;
+      _expenseTitleController.text = existingExpense.title; _expenseAmountController.text = existingExpense.amount.toString();
+      _selectedPayerId = existingExpense.payerId; _selectedBeneficiaries = List.from(existingExpense.beneficiaryIds);
+      _selectedCategory = existingExpense.category; _selectedReceiptPath = existingExpense.receiptPath; _selectedExpenseDate = existingExpense.date;
     } else {
-      _expenseTitleController.clear();
-      _expenseAmountController.clear();
-      _selectedPayerId = widget.group.members.first.id;
-      _selectedBeneficiaries = widget.group.members.map((m) => m.id).toList();
-      _selectedCategory = 'other';
-      _selectedReceiptPath = null;
-      _selectedExpenseDate = DateTime.now();
+      _expenseTitleController.clear(); _expenseAmountController.clear(); _selectedPayerId = widget.group.members.first.id;
+      _selectedBeneficiaries = widget.group.members.map((m) => m.id).toList(); _selectedCategory = 'other';
+      _selectedReceiptPath = null; _selectedExpenseDate = DateTime.now();
     }
-
     showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
+      context: context, isScrollControlled: true,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (BuildContext context, StateSetter setModalState) {
             final dateString = "${_selectedExpenseDate.day.toString().padLeft(2,'0')}.${_selectedExpenseDate.month.toString().padLeft(2,'0')}.${_selectedExpenseDate.year}";
-
             return Padding(
               padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom + 20, left: 20, right: 20, top: 20),
               child: SingleChildScrollView(
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(isEditing ? 'Edytuj Wydatek' : 'Nowy Wydatek', style: Theme.of(context).textTheme.titleLarge),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.of(context).pop(), 
-                        ),
-                      ],
-                    ),
-                    
+                    Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(isEditing ? 'Edytuj Wydatek' : 'Nowy Wydatek', style: Theme.of(context).textTheme.titleLarge), IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.of(context).pop())]),
                     TextField(controller: _expenseTitleController, decoration: const InputDecoration(labelText: 'Tytuł (np. Pizza)')),
                     TextField(controller: _expenseAmountController, decoration: const InputDecoration(labelText: 'Kwota (zł)'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
-                    
                     const SizedBox(height: 10),
                     ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text('Data zakupu: $dateString', style: const TextStyle(fontWeight: FontWeight.bold)),
-                      trailing: const Icon(Icons.calendar_today, color: Colors.blue),
+                      contentPadding: EdgeInsets.zero, title: Text('Data zakupu: $dateString', style: const TextStyle(fontWeight: FontWeight.bold)), trailing: const Icon(Icons.calendar_today, color: Colors.blue),
                       onTap: () async {
-                        final picked = await showDatePicker(
-                          context: context,
-                          initialDate: _selectedExpenseDate,
-                          firstDate: DateTime(2020),
-                          lastDate: DateTime.now(),
-                        );
-                        if (picked != null) {
-                          setModalState(() => _selectedExpenseDate = picked);
-                        }
+                        final picked = await showDatePicker(context: context, initialDate: _selectedExpenseDate, firstDate: DateTime(2020), lastDate: DateTime.now());
+                        if (picked != null) setModalState(() => _selectedExpenseDate = picked);
                       },
                     ),
-
                     DropdownButtonFormField<String>(
-                      value: _selectedCategory,
-                      decoration: const InputDecoration(labelText: 'Kategoria'),
-                      items: categories.entries.map((entry) {
-                        return DropdownMenuItem<String>(
-                          value: entry.key,
-                          child: Row(children: [Icon(entry.value['icon'] as IconData, color: entry.value['color'] as Color), const SizedBox(width: 10), Text(entry.value['label'] as String)]),
-                        );
-                      }).toList(),
+                      value: _selectedCategory, decoration: const InputDecoration(labelText: 'Kategoria'),
+                      items: categories.entries.map((entry) => DropdownMenuItem<String>(value: entry.key, child: Row(children: [Icon(entry.value['icon'] as IconData, color: entry.value['color'] as Color), const SizedBox(width: 10), Text(entry.value['label'] as String)]))).toList(),
                       onChanged: (val) => setModalState(() { _selectedCategory = val!; }),
                     ),
                     const SizedBox(height: 15),
-                    
                     const Text("Paragon (opcjonalnie):", style: TextStyle(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 10),
                     Row(
                       children: [
-                        if (_selectedReceiptPath != null)
-                          Stack(
-                            children: [
-                              Container(
-                                width: 80, height: 80, margin: const EdgeInsets.only(right: 10),
-                                decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8), image: DecorationImage(image: FileImage(File(_selectedReceiptPath!)), fit: BoxFit.cover)),
-                              ),
-                              Positioned(right: 0, top: 0, child: GestureDetector(onTap: () => setModalState(() => _selectedReceiptPath = null), child: const CircleAvatar(radius: 10, backgroundColor: Colors.red, child: Icon(Icons.close, size: 12, color: Colors.white)))),
-                            ],
-                          ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            TextButton.icon(onPressed: () => _pickImage(ImageSource.camera, setModalState), icon: const Icon(Icons.camera_alt), label: const Text("Zrób zdjęcie")),
-                            TextButton.icon(onPressed: () => _pickImage(ImageSource.gallery, setModalState), icon: const Icon(Icons.photo_library), label: const Text("Z galerii")),
-                          ],
-                        ),
+                        if (_selectedReceiptPath != null) Stack(children: [Container(width: 80, height: 80, margin: const EdgeInsets.only(right: 10), decoration: BoxDecoration(border: Border.all(color: Colors.grey), borderRadius: BorderRadius.circular(8), image: DecorationImage(image: FileImage(File(_selectedReceiptPath!)), fit: BoxFit.cover))), Positioned(right: 0, top: 0, child: GestureDetector(onTap: () => setModalState(() => _selectedReceiptPath = null), child: const CircleAvatar(radius: 10, backgroundColor: Colors.red, child: Icon(Icons.close, size: 12, color: Colors.white))))]),
+                        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [TextButton.icon(onPressed: () => _pickImage(ImageSource.camera, setModalState), icon: const Icon(Icons.camera_alt), label: const Text("Zrób zdjęcie")), TextButton.icon(onPressed: () => _pickImage(ImageSource.gallery, setModalState), icon: const Icon(Icons.photo_library), label: const Text("Z galerii"))]),
                       ],
                     ),
                     const SizedBox(height: 15),
-                    
                     DropdownButtonFormField<String>(
-                      value: _selectedPayerId,
-                      decoration: const InputDecoration(labelText: 'Kto płacił?'),
+                      value: _selectedPayerId, decoration: const InputDecoration(labelText: 'Kto płacił?'),
                       items: widget.group.members.map((m) => DropdownMenuItem(value: m.id, child: Text(m.name))).toList(),
                       onChanged: (val) => setModalState(() { _selectedPayerId = val; }),
                     ),
                     const SizedBox(height: 15),
-
                     const Text('Dla kogo (kto z tego korzystał):', style: TextStyle(fontWeight: FontWeight.bold)),
                     ...widget.group.members.map((m) {
-                      return CheckboxListTile(
-                        title: Text(m.name),
-                        value: _selectedBeneficiaries.contains(m.id),
-                        onChanged: (bool? checked) {
-                          setModalState(() {
-                            if (checked == true) _selectedBeneficiaries.add(m.id);
-                            else _selectedBeneficiaries.remove(m.id);
-                          });
-                        },
-                      );
+                      return CheckboxListTile(title: Text(m.name), value: _selectedBeneficiaries.contains(m.id), onChanged: (bool? checked) { setModalState(() { if (checked == true) _selectedBeneficiaries.add(m.id); else _selectedBeneficiaries.remove(m.id); }); });
                     }),
-
                     const SizedBox(height: 20),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(), 
-                          child: const Text('Anuluj', style: TextStyle(color: Colors.grey)),
-                        ),
-                        const SizedBox(width: 10),
-                        ElevatedButton(
-                          onPressed: () => _saveExpense(existingId: isEditing ? existingExpense.id : null), 
-                          child: Text(isEditing ? 'Zapisz zmiany' : 'Dodaj Wydatek')
-                        ),
-                      ],
+                      children: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Anuluj', style: TextStyle(color: Colors.grey))), const SizedBox(width: 10), ElevatedButton(onPressed: () => _saveExpense(existingId: isEditing ? existingExpense.id : null), child: Text(isEditing ? 'Zapisz zmiany' : 'Dodaj Wydatek'))],
                     ),
                     const SizedBox(height: 10), 
                   ],
@@ -404,28 +236,75 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               )
             : Text(widget.group.name),
         actions: [
+          // 1. UDOSTĘPNIANIE (Niebieski)
           IconButton(
-            icon: const Icon(Icons.history),
-            tooltip: "Historia Wyjazdu",
+            icon: const Icon(Icons.share, color: Colors.blue),
+            tooltip: "Zaproś znajomych",
             onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (ctx) => HistoryScreen(group: widget.group)),
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Zaproś znajomych 🌍', textAlign: TextAlign.center),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Podaj znajomym ten kod, aby mogli dołączyć do wyjazdu w swojej aplikacji:', textAlign: TextAlign.center),
+                      const SizedBox(height: 20),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(12)
+                        ),
+                        child: Text(
+                          widget.group.inviteCode ?? 'Brak kodu (stara grupa)',
+                          style: TextStyle(
+                            fontSize: 32, 
+                            fontWeight: FontWeight.bold, 
+                            letterSpacing: 8, 
+                            color: Theme.of(context).colorScheme.onPrimaryContainer
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Gotowe'))
+                  ],
+                ),
               );
             },
           ),
+          
+          // 2. HISTORIA (Fioletowy)
           IconButton(
-            icon: const Icon(Icons.pie_chart),
-            tooltip: "Podsumowanie",
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => SettlementScreen(group: widget.group))),
+            icon: const Icon(Icons.history, color: Colors.purple), 
+            tooltip: "Historia Wyjazdu", 
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => HistoryScreen(group: widget.group)))
           ),
+          
+          // 3. PODSUMOWANIE (Zielony)
           IconButton(
-            icon: Icon(_isSearching ? Icons.close : Icons.search),
+            icon: const Icon(Icons.pie_chart, color: Colors.green), 
+            tooltip: "Podsumowanie", 
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => SettlementScreen(group: widget.group)))
+          ),
+          
+          // 4. LUPKA / WYSZUKIWARKA (Pomarańczowy)
+          IconButton(
+            icon: Icon(_isSearching ? Icons.close : Icons.search, color: Colors.orange),
             onPressed: () => setState(() {
               if (_isSearching) { _isSearching = false; _searchQuery = ""; } else { _isSearching = true; }
             }),
           ),
+          
+          // 5. DODAJ OSOBĘ (Czerwony/Różowy)
           if (!_isSearching)
-            IconButton(icon: const Icon(Icons.person_add), tooltip: "Dodaj osobę", onPressed: _showAddMemberDialog)
+            IconButton(
+              icon: const Icon(Icons.person_add_alt, color: Colors.redAccent), 
+              tooltip: 'Dodaj osobę "lokalnie"', 
+              onPressed: _showAddMemberDialog
+            )
         ],
       ),
       
@@ -448,7 +327,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             );
           }).toList();
 
-          // Sortowanie wydatków po dacie (od najnowszego)
           cloudExpenses.sort((a, b) => b.date.compareTo(a.date));
 
           widget.group.members = cloudMembers;
@@ -493,13 +371,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                             itemBuilder: (ctx, index) {
                               final expense = displayedExpenses[index];
                               
-                              // --- LOGIKA WYŚWIETLANIA NAGŁÓWKA DATY ---
                               bool showDateHeader = false;
                               if (index == 0) {
-                                showDateHeader = true; // Pierwszy wydatek na liście zawsze dostaje nagłówek
+                                showDateHeader = true; 
                               } else {
                                 final prevExpense = displayedExpenses[index - 1];
-                                // Sprawdzamy czy rok, miesiąc lub dzień różni się od poprzedniego wydatku
                                 if (expense.date.year != prevExpense.date.year ||
                                     expense.date.month != prevExpense.date.month ||
                                     expense.date.day != prevExpense.date.day) {
@@ -511,7 +387,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                               final catData = categories[expense.category] ?? categories['other']!;
                               final dateStr = "${expense.date.day.toString().padLeft(2,'0')}.${expense.date.month.toString().padLeft(2,'0')}.${expense.date.year}";
 
-                              // Główny kafelek wydatku
                               Widget expenseTile = Dismissible(
                                 key: Key(expense.id),
                                 direction: DismissDirection.endToStart,
@@ -521,10 +396,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                   final currentDoc = await docRef.get();
                                   final currentData = currentDoc.data()?['expensesData'] as List<dynamic>? ?? [];
                                   final updatedList = currentData.where((e) => e['id'] != expense.id).toList();
-                                  
                                   await docRef.update({'expensesData': updatedList});
                                   _logActivity('usunął/ęła wydatek: ${expense.title}');
-
                                   if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Wydatek usunięty')));
                                 },
                                 child: ListTile(
@@ -542,7 +415,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                 ),
                               );
 
-                              // Jeśli mamy pokazać nagłówek daty, budujemy Column z nagłówkiem na górze
                               if (showDateHeader) {
                                 final dayName = _getWeekdayName(expense.date.weekday);
                                 return Column(
@@ -550,20 +422,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                   children: [
                                     Padding(
                                       padding: const EdgeInsets.only(left: 16.0, top: 16.0, bottom: 8.0),
-                                      child: Text(
-                                        "$dateStr • $dayName",
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Theme.of(context).colorScheme.primary,
-                                        ),
-                                      ),
+                                      child: Text("$dateStr • $dayName", style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.primary)),
                                     ),
                                     expenseTile,
                                   ],
                                 );
                               }
 
-                              // Jeśli nie, zwracamy sam kafelek
                               return expenseTile;
                             },
                           ),

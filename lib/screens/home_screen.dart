@@ -1,3 +1,4 @@
+import 'dart:math'; 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -15,6 +16,13 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final currentUser = FirebaseAuth.instance.currentUser!;
 
+  // --- FUNKCJA GENERUJĄCA 6-ZNAKOWY KOD ---
+  String _generateInviteCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rnd = Random();
+    return String.fromCharCodes(Iterable.generate(6, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))));
+  }
+
   void _addNewGroup(String name) {
     if (name.isEmpty) return;
 
@@ -22,16 +30,67 @@ class _HomeScreenState extends State<HomeScreen> {
         ? currentUser.displayName! 
         : 'Ja';
 
+    // Tworzymy grupę i OD RAZU przypisujemy jej wylosowany kod
     FirebaseFirestore.instance.collection('groups').add({
       'name': name,
       'ownerId': currentUser.uid,
       'created': Timestamp.now(),
+      'inviteCode': _generateInviteCode(), // <--- ZAPISUJEMY KOD W BAZIE
       'memberIds': [currentUser.uid], 
       'membersData': [
         {'id': currentUser.uid, 'name': myName}
       ], 
       'expensesData': [],
     });
+  }
+
+  // --- LOGIKA DOŁĄCZANIA DO GRUPY PO KODZIE ---
+  Future<void> _joinGroup(String code, BuildContext dialogContext) async {
+    code = code.trim().toUpperCase();
+    if (code.isEmpty) return;
+
+    try {
+      // Szukamy w chmurze grupy, która ma taki sam inviteCode
+      final query = await FirebaseFirestore.instance.collection('groups').where('inviteCode', isEqualTo: code).get();
+
+      if (query.docs.isEmpty) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nie znaleziono wyjazdu z takim kodem! ❌')));
+        return;
+      }
+
+      final doc = query.docs.first;
+      final data = doc.data();
+      List<dynamic> currentMemberIds = data['memberIds'] ?? [];
+
+      if (currentMemberIds.contains(currentUser.uid)) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Już jesteś w tym wyjeździe!')));
+        return;
+      }
+
+      final myName = currentUser.displayName != null && currentUser.displayName!.isNotEmpty ? currentUser.displayName! : 'Ktoś';
+
+      // 1. Dodajemy siebie do grupy
+      await doc.reference.update({
+        'memberIds': FieldValue.arrayUnion([currentUser.uid]),
+        'membersData': FieldValue.arrayUnion([{'id': currentUser.uid, 'name': myName}])
+      });
+
+      // 2. Dodajemy wpis w historii dla innych
+      await doc.reference.update({
+        'activitiesData': FieldValue.arrayUnion([{
+          'id': DateTime.now().toString(),
+          'message': "$myName dołączył(a) do wyjazdu za pomocą kodu!",
+          'timestamp': Timestamp.now(),
+        }])
+      });
+
+      if (mounted) {
+        Navigator.pop(dialogContext); // Zamknij okienko
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Dołączono do wyjazdu: ${data['name']}! 🎉')));
+      }
+    } catch (e) {
+       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Błąd: $e')));
+    }
   }
 
   void _showAddGroupDialog() {
@@ -46,10 +105,7 @@ class _HomeScreenState extends State<HomeScreen> {
           autofocus: true,
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Anuluj'),
-          ),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Anuluj')),
           ElevatedButton(
             onPressed: () {
               _addNewGroup(nameController.text);
@@ -62,18 +118,39 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _showJoinGroupDialog() {
+    final codeController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Dołącz do wyjazdu'),
+        content: TextField(
+          controller: codeController,
+          decoration: const InputDecoration(labelText: 'Wpisz 6-znakowy kod', hintText: 'np. X7B9KQ'),
+          textCapitalization: TextCapitalization.characters, // Klawiatura na duże litery
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Anuluj')),
+          ElevatedButton(
+            onPressed: () => _joinGroup(codeController.text, ctx),
+            child: const Text('Dołącz'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Group _mapFirestoreToGroup(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
-    
     DateTime parsedDate = DateTime.now();
-    if (data['created'] != null) {
-      parsedDate = (data['created'] as Timestamp).toDate();
-    }
+    if (data['created'] != null) parsedDate = (data['created'] as Timestamp).toDate();
 
     return Group(
       id: doc.id, 
       name: data['name'] ?? 'Bez nazwy',
       createdAt: parsedDate,
+      inviteCode: data['inviteCode'], // <--- Pobieramy kod
       members: [], 
       expenses: [], 
     );
@@ -88,24 +165,14 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'Ustawienia',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (ctx) => const SettingsScreen()),
-              );
-            },
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => const SettingsScreen())),
           ),
         ],
       ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('groups')
-            .where('memberIds', arrayContains: currentUser.uid)
-            .snapshots(),
+        stream: FirebaseFirestore.instance.collection('groups').where('memberIds', arrayContains: currentUser.uid).snapshots(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          
+          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
             return Center(
               child: Column(
@@ -113,24 +180,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   const Icon(Icons.beach_access, size: 80, color: Colors.grey),
                   const SizedBox(height: 20),
-                  Text(
-                    'Brak wyjazdów.\nKliknij "+" aby dodać pierwszy!',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey),
-                  ),
+                  Text('Brak wyjazdów.\nKliknij "+" aby dodać pierwszy!', textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.grey)),
                 ],
               ),
             );
           }
 
           final docs = snapshot.data!.docs;
-          
-          // Sortujemy wyjazdy (najnowsze na górze)
           docs.sort((a, b) {
-            final aData = a.data() as Map<String, dynamic>;
-            final bData = b.data() as Map<String, dynamic>;
-            final aTime = aData['created'] as Timestamp?;
-            final bTime = bData['created'] as Timestamp?;
+            final aTime = (a.data() as Map<String, dynamic>)['created'] as Timestamp?;
+            final bTime = (b.data() as Map<String, dynamic>)['created'] as Timestamp?;
             if (aTime == null || bTime == null) return 0;
             return bTime.compareTo(aTime);
           });
@@ -145,13 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
               return Dismissible(
                 key: Key(groupDoc.id),
                 direction: DismissDirection.endToStart,
-                background: Container(
-                  color: Colors.red.withOpacity(0.8),
-                  alignment: Alignment.centerRight,
-                  padding: const EdgeInsets.only(right: 20),
-                  child: const Icon(Icons.delete_forever, color: Colors.white, size: 30),
-                ),
-                // Okienko potwierdzenia usunięcia wyjazdu
+                background: Container(color: Colors.red.withOpacity(0.8), alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete_forever, color: Colors.white, size: 30)),
                 confirmDismiss: (direction) async {
                   return await showDialog(
                     context: context,
@@ -160,17 +213,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       content: const Text('Czy na pewno chcesz usunąć ten wyjazd ze wszystkimi wydatkami? Tej akcji nie można cofnąć.'),
                       actions: [
                         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Anuluj')),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('Usuń'),
-                        ),
+                        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white), onPressed: () => Navigator.pop(ctx, true), child: const Text('Usuń')),
                       ],
                     ),
                   );
                 },
                 onDismissed: (direction) {
-                  // Usuwamy wyjazd z bazy w chmurze
                   FirebaseFirestore.instance.collection('groups').doc(groupDoc.id).delete();
                 },
                 child: Card(
@@ -179,24 +227,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: ListTile(
                     leading: CircleAvatar(
                       backgroundColor: Theme.of(context).colorScheme.primary,
-                      child: Text(
-                        (groupData['name'] as String).isNotEmpty ? (groupData['name'] as String)[0].toUpperCase() : '?',
-                        style: const TextStyle(color: Colors.white),
-                      ),
+                      child: Text((groupData['name'] as String).isNotEmpty ? (groupData['name'] as String)[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white)),
                     ),
-                    title: Text(
-                      groupData['name'], 
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-                    ),
+                    title: Text(groupData['name'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                     subtitle: Text("ID: ...${groupDoc.id.substring(groupDoc.id.length - 4)}"),
                     trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                     onTap: () {
                       final groupObject = _mapFirestoreToGroup(groupDoc);
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (ctx) => GroupDetailScreen(group: groupObject),
-                        ),
-                      );
+                      Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => GroupDetailScreen(group: groupObject)));
                     },
                   ),
                 ),
@@ -205,10 +243,41 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         },
       ),
+      // --- ZMIANA: PRZYCISK ROZWIJANY ---
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddGroupDialog,
-        label: const Text('Nowy Wyjazd'),
-        icon: const Icon(Icons.add),
+        onPressed: () {
+          showModalBottomSheet(
+            context: context,
+            builder: (ctx) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text("Co chcesz zrobić?", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.add_circle_outline, color: Colors.blue, size: 30),
+                  title: const Text('Stwórz nowy wyjazd', style: TextStyle(fontSize: 16)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showAddGroupDialog();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.group_add, color: Colors.green, size: 30),
+                  title: const Text('Dołącz po kodzie', style: TextStyle(fontSize: 16)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showJoinGroupDialog();
+                  },
+                ),
+                const SizedBox(height: 20),
+              ],
+            ),
+          );
+        },
+        label: const Text('Wyjazdy'),
+        icon: const Icon(Icons.menu),
       ),
     );
   }

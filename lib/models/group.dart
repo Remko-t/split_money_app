@@ -5,6 +5,7 @@ class Group {
   final String id;
   final String name;
   final DateTime createdAt;
+  final String? inviteCode; 
   List<Member> members;
   List<Expense> expenses;
 
@@ -12,6 +13,7 @@ class Group {
     required this.id,
     required this.name,
     required this.createdAt,
+    this.inviteCode, 
     this.members = const [],
     this.expenses = const [],
   });
