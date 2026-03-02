@@ -38,7 +38,7 @@ class SettlementScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Potwierdź spłatę'),
-        content: Text('Czy na pewno chcesz oznaczyć, że ${transfer.fromName} oddał(a) ${transfer.amount.toStringAsFixed(2)} zł do ${transfer.toName}?'),
+        content: Text('Czy na pewno chcesz oznaczyć, że ${transfer.fromName} oddał(a) ${transfer.amount.toStringAsFixed(2)} ${group.currency} do ${transfer.toName}?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Anuluj')),
           ElevatedButton(
@@ -72,7 +72,7 @@ class SettlementScreen extends StatelessWidget {
       await FirebaseFirestore.instance.collection('groups').doc(group.id).update({
         'activitiesData': FieldValue.arrayUnion([{
           'id': DateTime.now().toString(),
-          'message': "$userName oznaczył(a) dług jako uregulowany: ${transfer.fromName} ➔ ${transfer.toName} (${transfer.amount.toStringAsFixed(2)} zł)",
+          'message': "$userName oznaczył(a) dług jako uregulowany: ${transfer.fromName} ➔ ${transfer.toName} (${transfer.amount.toStringAsFixed(2)} ${group.currency})",
           'timestamp': Timestamp.now(),
         }])
       });
@@ -251,7 +251,7 @@ class SettlementScreen extends StatelessWidget {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               const Text('Suma wydatków:', style: TextStyle(fontSize: 18)),
-                              Text('${totalExpenses.toStringAsFixed(2)} zł', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                              Text('${totalExpenses.toStringAsFixed(2)} ${group.currency}', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
                             ],
                           ),
                         ),
@@ -280,7 +280,7 @@ class SettlementScreen extends StatelessWidget {
                                     padding: const EdgeInsets.symmetric(horizontal: 12.0),
                                     child: Column(
                                       children: [
-                                        Text('${transfer.amount.toStringAsFixed(2)} zł', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                        Text('${transfer.amount.toStringAsFixed(2)} ${group.currency}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                                         const Icon(Icons.arrow_forward_rounded, color: Colors.grey),
                                       ],
                                     ),
@@ -317,7 +317,7 @@ class SettlementScreen extends StatelessWidget {
 
                         Color statusColor = isSettled ? Colors.grey : (isOwed ? Colors.green : Colors.red);
                         String statusText = isSettled ? 'Rozliczony' : (isOwed ? 'Na plusie' : 'Na minusie');
-                        String amountText = '${balance.abs().toStringAsFixed(2)} zł';
+                        String amountText = '${balance.abs().toStringAsFixed(2)} ${group.currency}';
 
                         return ListTile(
                           contentPadding: EdgeInsets.zero,

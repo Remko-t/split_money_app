@@ -5,7 +5,8 @@ class Group {
   final String id;
   final String name;
   final DateTime createdAt;
-  final String? inviteCode; 
+  final String? inviteCode;
+  final String currency;
   List<Member> members;
   List<Expense> expenses;
 
@@ -13,7 +14,8 @@ class Group {
     required this.id,
     required this.name,
     required this.createdAt,
-    this.inviteCode, 
+    this.inviteCode,
+    this.currency = 'zł', 
     this.members = const [],
     this.expenses = const [],
   });

@@ -131,7 +131,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
     if (existingId == null) {
       await docRef.update({'expensesData': FieldValue.arrayUnion([expenseMap])});
-      _logActivity('dodał(a) wydatek: $title (${amount.toStringAsFixed(2)} zł)');
+      _logActivity('dodał(a) wydatek: $title (${amount.toStringAsFixed(2)} ${widget.group.currency})');
     } else {
       final doc = await docRef.get();
       final currentData = doc.data()?['expensesData'] as List<dynamic>? ?? [];
@@ -174,7 +174,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                   children: [
                     Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(isEditing ? 'Edytuj Wydatek' : 'Nowy Wydatek', style: Theme.of(context).textTheme.titleLarge), IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.of(context).pop())]),
                     TextField(controller: _expenseTitleController, decoration: const InputDecoration(labelText: 'Tytuł (np. Pizza)')),
-                    TextField(controller: _expenseAmountController, decoration: const InputDecoration(labelText: 'Kwota (zł)'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                    TextField(controller: _expenseAmountController, decoration: InputDecoration(labelText: 'Kwota (${widget.group.currency})'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
                     const SizedBox(height: 10),
                     ListTile(
                       contentPadding: EdgeInsets.zero, title: Text('Data zakupu: $dateString', style: const TextStyle(fontWeight: FontWeight.bold)), trailing: const Icon(Icons.calendar_today, color: Colors.blue),
@@ -408,7 +408,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       if (expense.receiptPath != null) IconButton(icon: const Icon(Icons.receipt_long, color: Colors.blueGrey), onPressed: () => _showReceiptDialog(expense.receiptPath!)),
-                                      Text('${expense.amount.toStringAsFixed(2)} zł', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                      Text('${expense.amount.toStringAsFixed(2)} ${widget.group.currency}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                                     ],
                                   ),
                                   onTap: () => _showAddExpenseSheet(existingExpense: expense),
