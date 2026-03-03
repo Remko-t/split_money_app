@@ -1,20 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'firebase_options.dart';
 import 'screens/home_screen.dart';
 import 'screens/auth_screen.dart';
 
-// GLOBALNA ZMIENNA DO MOTYWU (Light/Dark)
 final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  
-  // USUNIĘTO: Hive.initFlutter(), rejestrację adapterów i otwieranie boxów!
-  
+
+  // --- NOWOŚĆ: WŁĄCZENIE TRYBU OFFLINE (FIRESTORE CACHE) ---
+  FirebaseFirestore.instance.settings = const Settings(
+    persistenceEnabled: true, // Zezwala na działanie bez internetu
+    cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED, // Może zapisać dużo danych na telefonie
+  );
+
   runApp(const MyApp());
 }
 

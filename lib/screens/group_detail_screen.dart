@@ -121,7 +121,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     }
   }
 
-  // --- POPRAWIONE: ŁĄCZENIE PROFILU (Mergowanie) ---
   Future<void> _claimProfile(Member localMember) async {
     final myUid = FirebaseAuth.instance.currentUser!.uid;
     final myName = FirebaseAuth.instance.currentUser?.displayName ?? 'Ja';
@@ -152,7 +151,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       final currentExpenses = data['expensesData'] as List<dynamic>? ?? [];
       List<dynamic> currentMembers = data['membersData'] as List<dynamic>? ?? [];
 
-      // 1. Aktualizujemy wszystkie wydatki, podmieniając stare ID na nowe (moje)
       final updatedExpenses = currentExpenses.map((e) {
         final expenseMap = Map<String, dynamic>.from(e);
         if (expenseMap['payerId'] == localMember.id) {
@@ -167,10 +165,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         return expenseMap;
       }).toList();
 
-      // 2. Filtrujemy listę osób: Usuwamy stary profil oraz profil "podwójny", by zostawić tylko jeden, właściwy
       final filteredMembers = currentMembers.where((m) => m['id'] != localMember.id && m['id'] != myUid).toList();
-      
-      // Dodajemy JEDEN profil, który zawiera nasze prawdziwe ID i prawdziwe Imię
       filteredMembers.add({'id': myUid, 'name': myName});
 
       await docRef.update({
@@ -181,7 +176,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       _logActivity('połączył(a) swój profil z: ${localMember.name}');
       
       if (mounted) {
-        // Zamykamy dolne okienko zarządzania, by aplikacja płynnie przebudowała widok bez błędów!
         Navigator.pop(context); 
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profil zaktualizowany i połączony! 🎉')));
       }
@@ -270,7 +264,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   Widget _buildStackedAvatars(List<Member> members) {
     if (members.isEmpty) return const Text("Brak uczestników", style: TextStyle(color: Colors.grey));
     
-    // Zwiększony limit: Pokazujemy aż do 8 okrągłych avatarów, zanim wyświetlimy "+X"
     int maxAvatars = 8; 
     int displayCount = members.length > maxAvatars ? maxAvatars - 1 : members.length;
     int remaining = members.length - displayCount;
@@ -353,8 +346,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   void _showAddExpenseSheet({Expense? existingExpense}) {
-    // --- OCHRONA PRZED BŁĘDAMI Z DROPDOWNEM ---
-    // Filtrujemy użytkowników tak, by każdy miał unikalne ID.
     final uniqueMembers = <Member>[];
     final seenIds = <String>{};
     for (var m in widget.group.members) {
@@ -375,7 +366,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       _selectedPayerId = existingExpense.payerId; _selectedBeneficiaries = List.from(existingExpense.beneficiaryIds);
       _selectedCategory = existingExpense.category; _selectedReceiptPath = existingExpense.receiptPath; _selectedExpenseDate = existingExpense.date;
       
-      // Jeżeli z jakiegoś powodu ID płatnika już nie istnieje w bazie (został połączony), zabezpieczamy kod:
       if (!uniqueMembers.any((m) => m.id == _selectedPayerId)) {
         _selectedPayerId = uniqueMembers.first.id;
       }
@@ -494,12 +484,16 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         ],
       ),
       
+      // --- ZMIANA: Dodano nasłuchiwanie na metadane cache (Offline) ---
       body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance.collection('groups').doc(widget.group.id).snapshots(),
+        stream: FirebaseFirestore.instance.collection('groups').doc(widget.group.id).snapshots(includeMetadataChanges: true),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
           if (!snapshot.hasData || snapshot.data?.data() == null) return const Center(child: Text("Błąd ładowania."));
 
+          // Sprawdzamy, czy dane są ładowane z pamięci telefonu (brak neta)
+          final bool isOffline = snapshot.data!.metadata.isFromCache;
+          
           final data = snapshot.data!.data() as Map<String, dynamic>;
           final rawMembers = data['membersData'] as List<dynamic>? ?? [];
           final cloudMembers = rawMembers.map((m) => Member(id: m['id'], name: m['name'])).toList();
@@ -539,6 +533,19 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
           return Column(
             children: [
+              // --- NOWOŚĆ: PASEK OFFLINE ---
+              if (isOffline)
+                Container(
+                  width: double.infinity,
+                  color: Colors.redAccent,
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: const Text(
+                    'Brak internetu. Działasz w trybie offline ☁️',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                ),
+
               InkWell(
                 onTap: _showManageMembersSheet,
                 child: Container(
