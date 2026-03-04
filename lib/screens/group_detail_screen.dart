@@ -26,7 +26,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
   bool _isSearching = false;
   String _searchQuery = "";
-
   String _sortBy = 'newest'; 
   bool _filterMyExpenses = false;
   String _filterCategory = 'all';
@@ -35,6 +34,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   List<String> _selectedBeneficiaries = [];
   String _selectedCategory = 'other';
   DateTime _selectedExpenseDate = DateTime.now();
+  
+  // --- ZMIENNE DO ROZLICZANIA Z KOSZYKA ---
+  bool _isItemized = false;
+  List<Map<String, dynamic>> _receiptItemsData = [];
 
   final ImagePicker _picker = ImagePicker();
   String? _selectedReceiptPath;
@@ -105,7 +108,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   Future<void> _deleteMember(Member member) async {
-    final hasExpenses = widget.group.expenses.any((e) => e.payerId == member.id || e.beneficiaryIds.contains(member.id));
+    final hasExpenses = widget.group.expenses.any((e) => e.payerId == member.id || e.beneficiaryIds.contains(member.id) || e.items.any((i) => i.beneficiaries.contains(member.id)));
     if (hasExpenses) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nie można usunąć uczestnika, który brał udział w wydatkach!'), backgroundColor: Colors.red));
       return;
@@ -124,7 +127,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   Future<void> _claimProfile(Member localMember) async {
     final myUid = FirebaseAuth.instance.currentUser!.uid;
     final myName = FirebaseAuth.instance.currentUser?.displayName ?? 'Ja';
-
     if (localMember.id == myUid) return;
 
     final confirm = await showDialog<bool>(
@@ -134,11 +136,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         content: Text('Czy chcesz przypisać profil "${localMember.name}" do swojego konta?\n\nWydatki zostaną zachowane, a profil zaktualizuje się na Twoje dane.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Anuluj')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Tak, to ja!'),
-          ),
+          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white), onPressed: () => Navigator.pop(ctx, true), child: const Text('Tak, to ja!')),
         ],
       ),
     );
@@ -153,42 +151,46 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
       final updatedExpenses = currentExpenses.map((e) {
         final expenseMap = Map<String, dynamic>.from(e);
-        if (expenseMap['payerId'] == localMember.id) {
-          expenseMap['payerId'] = myUid;
-        }
+        if (expenseMap['payerId'] == localMember.id) expenseMap['payerId'] = myUid;
+        
+        // Zmiana ID w głównej liście
         final beneficiaries = List<String>.from(expenseMap['beneficiaryIds'] ?? []);
         if (beneficiaries.contains(localMember.id)) {
           beneficiaries.remove(localMember.id);
           if (!beneficiaries.contains(myUid)) beneficiaries.add(myUid);
           expenseMap['beneficiaryIds'] = beneficiaries;
         }
+
+        // Zmiana ID w pozycjach paragonu
+        final itemsData = List<dynamic>.from(expenseMap['items'] ?? []);
+        final updatedItems = itemsData.map((itemDyn) {
+           final itemMap = Map<String, dynamic>.from(itemDyn);
+           final itemBens = List<String>.from(itemMap['beneficiaries'] ?? []);
+           if (itemBens.contains(localMember.id)) {
+             itemBens.remove(localMember.id);
+             if (!itemBens.contains(myUid)) itemBens.add(myUid);
+             itemMap['beneficiaries'] = itemBens;
+           }
+           return itemMap;
+        }).toList();
+        expenseMap['items'] = updatedItems;
+
         return expenseMap;
       }).toList();
 
       final filteredMembers = currentMembers.where((m) => m['id'] != localMember.id && m['id'] != myUid).toList();
       filteredMembers.add({'id': myUid, 'name': myName});
 
-      await docRef.update({
-        'expensesData': updatedExpenses,
-        'membersData': filteredMembers,
-      });
-
+      await docRef.update({'expensesData': updatedExpenses, 'membersData': filteredMembers});
       _logActivity('połączył(a) swój profil z: ${localMember.name}');
-      
-      if (mounted) {
-        Navigator.pop(context); 
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profil zaktualizowany i połączony! 🎉')));
-      }
+      if (mounted) { Navigator.pop(context); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profil zaktualizowany i połączony! 🎉'))); }
     }
   }
 
   void _showManageMembersSheet() {
     final myUid = FirebaseAuth.instance.currentUser!.uid;
-
     showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      context: context, isScrollControlled: true, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) {
         return StreamBuilder<DocumentSnapshot>(
           stream: FirebaseFirestore.instance.collection('groups').doc(widget.group.id).snapshots(),
@@ -206,34 +208,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                   const Text('Zarządzaj uczestnikami', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
                   ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: currentMembers.length,
+                    shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: currentMembers.length,
                     itemBuilder: (context, index) {
                       final m = currentMembers[index];
                       final isMe = m.id == myUid;
-
                       return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Colors.primaries[index % Colors.primaries.length].withOpacity(0.8),
-                          child: Text(m.name.isNotEmpty ? m.name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
-                        ),
-                        title: Row(
-                          children: [
-                            Text(m.name, style: const TextStyle(fontWeight: FontWeight.w500)),
-                            if (isMe) 
-                              const Padding(padding: EdgeInsets.only(left: 8.0), child: Text('(Ty)', style: TextStyle(color: Colors.grey, fontSize: 12)))
-                          ],
-                        ),
+                        leading: CircleAvatar(backgroundColor: Colors.primaries[index % Colors.primaries.length].withOpacity(0.8), child: Text(m.name.isNotEmpty ? m.name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+                        title: Row(children: [Text(m.name, style: const TextStyle(fontWeight: FontWeight.w500)), if (isMe) const Padding(padding: EdgeInsets.only(left: 8.0), child: Text('(Ty)', style: TextStyle(color: Colors.grey, fontSize: 12)))]),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (!isMe)
-                              IconButton(
-                                icon: const Icon(Icons.link, color: Colors.teal),
-                                tooltip: 'Przypisz ten profil do siebie',
-                                onPressed: () => _claimProfile(m),
-                              ),
+                            if (!isMe) IconButton(icon: const Icon(Icons.link, color: Colors.teal), tooltip: 'Przypisz ten profil do siebie', onPressed: () => _claimProfile(m)),
                             IconButton(icon: const Icon(Icons.edit, color: Colors.blueGrey), onPressed: () => _editMember(m)),
                             IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: () => _deleteMember(m)),
                           ]
@@ -242,15 +227,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                     }
                   ),
                   const SizedBox(height: 10),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _showAddMemberDialog();
-                    },
-                    icon: const Icon(Icons.person_add),
-                    label: const Text('Dodaj nową osobę lokalnie'),
-                    style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-                  ),
+                  ElevatedButton.icon(onPressed: () { Navigator.pop(ctx); _showAddMemberDialog(); }, icon: const Icon(Icons.person_add), label: const Text('Dodaj nową osobę lokalnie'), style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50))),
                   const SizedBox(height: 20),
                 ]
               )
@@ -263,75 +240,77 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
   Widget _buildStackedAvatars(List<Member> members) {
     if (members.isEmpty) return const Text("Brak uczestników", style: TextStyle(color: Colors.grey));
-    
     int maxAvatars = 8; 
     int displayCount = members.length > maxAvatars ? maxAvatars - 1 : members.length;
     int remaining = members.length - displayCount;
-
     List<Widget> stackChildren = [];
     for (int i = 0; i < displayCount; i++) {
       stackChildren.add(
         Positioned(
           left: i * 26.0,
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 2),
-            ),
-            child: CircleAvatar(
-              radius: 14,
-              backgroundColor: Colors.primaries[i % Colors.primaries.length].withOpacity(0.9),
-              child: Text(
-                members[i].name.isNotEmpty ? members[i].name[0].toUpperCase() : '?', 
-                style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)
-              ),
-            ),
-          ),
+          child: Container(decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 2)), child: CircleAvatar(radius: 14, backgroundColor: Colors.primaries[i % Colors.primaries.length].withOpacity(0.9), child: Text(members[i].name.isNotEmpty ? members[i].name[0].toUpperCase() : '?', style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)))),
         ),
       );
     }
-
     if (remaining > 0) {
       stackChildren.add(
         Positioned(
           left: displayCount * 26.0,
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 2),
-            ),
-            child: CircleAvatar(
-              radius: 14,
-              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: Text('+$remaining', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-            ),
-          ),
+          child: Container(decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 2)), child: CircleAvatar(radius: 14, backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest, child: Text('+$remaining', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurfaceVariant)))),
         ),
       );
     }
-
-    return SizedBox(
-      width: (displayCount * 26.0) + (remaining > 0 ? 32.0 : 32.0),
-      height: 32,
-      child: Stack(children: stackChildren),
-    );
+    return SizedBox(width: (displayCount * 26.0) + (remaining > 0 ? 32.0 : 32.0), height: 32, child: Stack(children: stackChildren));
   }
 
+  // --- ZMIANA: Zapisywanie wydatku z pozycjami ---
   Future<void> _saveExpense({String? existingId}) async {
     final title = _expenseTitleController.text.trim();
-    final amount = double.tryParse(_expenseAmountController.text) ?? 0;
-    if (title.isEmpty || amount <= 0 || _selectedPayerId == null || _selectedBeneficiaries.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Wypełnij poprawnie wszystkie pola i wybierz osoby!')));
+    if (title.isEmpty || _selectedPayerId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Wpisz nazwę wydarzenia i wybierz płatnika!')));
       return;
     }
+
+    double finalAmount = 0;
+    List<Map<String, dynamic>> finalItems = [];
+
+    if (_isItemized) {
+      for (var item in _receiptItemsData) {
+        final n = item['nameCtrl'].text.trim();
+        final p = double.tryParse(item['priceCtrl'].text.replaceAll(',', '.')) ?? 0.0;
+        if (n.isNotEmpty && p > 0 && item['beneficiaries'].isNotEmpty) {
+          finalAmount += p;
+          finalItems.add({'name': n, 'price': p, 'beneficiaries': item['beneficiaries']});
+        }
+      }
+      if (finalItems.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Dodaj poprawnie przynajmniej jedną pozycję!')));
+        return;
+      }
+    } else {
+      finalAmount = double.tryParse(_expenseAmountController.text.replaceAll(',', '.')) ?? 0;
+      if (finalAmount <= 0 || _selectedBeneficiaries.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Podaj kwotę i zaznacz dla kogo!')));
+        return;
+      }
+    }
+
     final expenseMap = {
-      'id': existingId ?? DateTime.now().toString(), 'title': title, 'amount': amount, 'payerId': _selectedPayerId,
-      'beneficiaryIds': _selectedBeneficiaries, 'date': Timestamp.fromDate(_selectedExpenseDate), 'category': _selectedCategory, 'receiptPath': _selectedReceiptPath,
+      'id': existingId ?? DateTime.now().toString(), 
+      'title': title, 
+      'amount': finalAmount, 
+      'payerId': _selectedPayerId,
+      'beneficiaryIds': _isItemized ? [] : _selectedBeneficiaries, // Jeśli pozycje, wyłączamy stare proporcje
+      'date': Timestamp.fromDate(_selectedExpenseDate), 
+      'category': _selectedCategory, 
+      'receiptPath': _selectedReceiptPath,
+      'items': finalItems, // <--- Zapis nowych pozycji
     };
+
     final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
     if (existingId == null) {
       await docRef.update({'expensesData': FieldValue.arrayUnion([expenseMap])});
-      _logActivity('dodał(a) wydatek: $title (${amount.toStringAsFixed(2)} ${widget.group.currency})');
+      _logActivity('dodał(a) wydatek: $title (${finalAmount.toStringAsFixed(2)} ${widget.group.currency})');
     } else {
       final doc = await docRef.get();
       final currentData = doc.data()?['expensesData'] as List<dynamic>? ?? [];
@@ -339,6 +318,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       await docRef.update({'expensesData': updatedList});
       _logActivity('edytował(a) wydatek: $title');
     }
+    
     _expenseTitleController.clear();
     _expenseAmountController.clear();
     _selectedReceiptPath = null;
@@ -349,30 +329,45 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     final uniqueMembers = <Member>[];
     final seenIds = <String>{};
     for (var m in widget.group.members) {
-      if (!seenIds.contains(m.id)) {
-        seenIds.add(m.id);
-        uniqueMembers.add(m);
-      }
+      if (!seenIds.contains(m.id)) { seenIds.add(m.id); uniqueMembers.add(m); }
     }
 
     if (uniqueMembers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Brak uczestników!')));
-      return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Brak uczestników!'))); return;
     }
 
     final isEditing = existingExpense != null;
     if (isEditing) {
-      _expenseTitleController.text = existingExpense.title; _expenseAmountController.text = existingExpense.amount.toString();
-      _selectedPayerId = existingExpense.payerId; _selectedBeneficiaries = List.from(existingExpense.beneficiaryIds);
-      _selectedCategory = existingExpense.category; _selectedReceiptPath = existingExpense.receiptPath; _selectedExpenseDate = existingExpense.date;
+      _expenseTitleController.text = existingExpense.title; 
+      _expenseAmountController.text = existingExpense.amount.toString();
+      _selectedPayerId = existingExpense.payerId; 
+      _selectedBeneficiaries = List.from(existingExpense.beneficiaryIds);
+      _selectedCategory = existingExpense.category; 
+      _selectedReceiptPath = existingExpense.receiptPath; 
+      _selectedExpenseDate = existingExpense.date;
+      if (!uniqueMembers.any((m) => m.id == _selectedPayerId)) _selectedPayerId = uniqueMembers.first.id;
       
-      if (!uniqueMembers.any((m) => m.id == _selectedPayerId)) {
-        _selectedPayerId = uniqueMembers.first.id;
+      // Odczytujemy zapisane pozycje
+      _isItemized = existingExpense.items.isNotEmpty;
+      _receiptItemsData.clear();
+      if (_isItemized) {
+        for (var item in existingExpense.items) {
+          _receiptItemsData.add({
+            'nameCtrl': TextEditingController(text: item.name),
+            'priceCtrl': TextEditingController(text: item.price.toString()),
+            'beneficiaries': List<String>.from(item.beneficiaries),
+          });
+        }
       }
     } else {
-      _expenseTitleController.clear(); _expenseAmountController.clear(); _selectedPayerId = uniqueMembers.first.id;
-      _selectedBeneficiaries = uniqueMembers.map((m) => m.id).toList(); _selectedCategory = 'other';
+      _expenseTitleController.clear(); _expenseAmountController.clear(); 
+      _selectedPayerId = uniqueMembers.first.id;
+      _selectedBeneficiaries = uniqueMembers.map((m) => m.id).toList(); 
+      _selectedCategory = 'other';
       _selectedReceiptPath = null; _selectedExpenseDate = DateTime.now();
+      
+      _isItemized = false;
+      _receiptItemsData.clear();
     }
     
     showModalBottomSheet(
@@ -388,8 +383,91 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                   mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(isEditing ? 'Edytuj Wydatek' : 'Nowy Wydatek', style: Theme.of(context).textTheme.titleLarge), IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.of(context).pop())]),
-                    TextField(controller: _expenseTitleController, decoration: const InputDecoration(labelText: 'Tytuł (np. Pizza)')),
-                    TextField(controller: _expenseAmountController, decoration: InputDecoration(labelText: 'Kwota (${widget.group.currency})'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                    TextField(controller: _expenseTitleController, decoration: const InputDecoration(labelText: 'Tytuł (np. Restauracja)')),
+                    const SizedBox(height: 10),
+                    
+                    // --- PRZEŁĄCZNIK TYPU ROZLICZENIA ---
+                    Card(
+                      elevation: 0, color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+                      child: SwitchListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        title: const Text('Rozlicz pozycjami 🧾', style: TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: const Text('Każdy płaci tylko za to, co kupił.', style: TextStyle(fontSize: 12)),
+                        value: _isItemized,
+                        activeColor: Colors.teal,
+                        onChanged: (val) {
+                          setModalState(() {
+                            _isItemized = val;
+                            if (_isItemized && _receiptItemsData.isEmpty) {
+                              _receiptItemsData.add({
+                                'nameCtrl': TextEditingController(), 'priceCtrl': TextEditingController(),
+                                'beneficiaries': uniqueMembers.map((m) => m.id).toList(),
+                              });
+                            }
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // --- CZY POZYCJE CZY ZWYKŁA KWOTA ---
+                    if (!_isItemized) ...[
+                      TextField(controller: _expenseAmountController, decoration: InputDecoration(labelText: 'Całkowita kwota (${widget.group.currency})'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                      const SizedBox(height: 15),
+                      const Text('Dla kogo (kto z tego korzystał):', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ...uniqueMembers.map((m) {
+                        return CheckboxListTile(title: Text(m.name), value: _selectedBeneficiaries.contains(m.id), onChanged: (bool? checked) { setModalState(() { if (checked == true) _selectedBeneficiaries.add(m.id); else _selectedBeneficiaries.remove(m.id); }); });
+                      }),
+                    ] else ...[
+                      // Sekcja pozycji na paragonie
+                      ..._receiptItemsData.asMap().entries.map((entry) {
+                        int idx = entry.key; var itemData = entry.value;
+                        return Card(
+                          elevation: 2, margin: const EdgeInsets.symmetric(vertical: 6),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(child: TextField(controller: itemData['nameCtrl'], decoration: const InputDecoration(labelText: 'Co kupiono? (np. Piwo)', isDense: true))),
+                                    const SizedBox(width: 10),
+                                    SizedBox(width: 100, child: TextField(controller: itemData['priceCtrl'], decoration: InputDecoration(labelText: 'Cena (${widget.group.currency})', isDense: true), keyboardType: const TextInputType.numberWithOptions(decimal: true))),
+                                    IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () { setModalState(() { _receiptItemsData.removeAt(idx); }); }),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                const Text('Kto z tego korzystał?', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                                const SizedBox(height: 4),
+                                Wrap(
+                                  spacing: 8, runSpacing: 4,
+                                  children: uniqueMembers.map((m) {
+                                    final isSelected = itemData['beneficiaries'].contains(m.id);
+                                    return FilterChip(
+                                      label: Text(m.name, style: TextStyle(fontSize: 12, color: isSelected ? Colors.white : Colors.black87)),
+                                      selected: isSelected, selectedColor: Colors.teal, checkmarkColor: Colors.white,
+                                      onSelected: (selected) { setModalState(() { if (selected) { itemData['beneficiaries'].add(m.id); } else { itemData['beneficiaries'].remove(m.id); } }); },
+                                    );
+                                  }).toList(),
+                                ),
+                              ]
+                            ),
+                          ),
+                        );
+                      }),
+                      TextButton.icon(
+                        icon: const Icon(Icons.add_circle_outline), label: const Text('Dodaj kolejną pozycję'),
+                        onPressed: () { setModalState(() { _receiptItemsData.add({'nameCtrl': TextEditingController(), 'priceCtrl': TextEditingController(), 'beneficiaries': uniqueMembers.map((m) => m.id).toList()}); }); },
+                      ),
+                    ],
+
+                    const SizedBox(height: 15),
+                    DropdownButtonFormField<String>(
+                      value: _selectedPayerId, decoration: const InputDecoration(labelText: 'Kto płacił za całość?'),
+                      items: uniqueMembers.map((m) => DropdownMenuItem(value: m.id, child: Text(m.name))).toList(),
+                      onChanged: (val) => setModalState(() { _selectedPayerId = val; }),
+                    ),
                     const SizedBox(height: 10),
                     ListTile(
                       contentPadding: EdgeInsets.zero, title: Text('Data zakupu: $dateString', style: const TextStyle(fontWeight: FontWeight.bold)), trailing: const Icon(Icons.calendar_today, color: Colors.blue),
@@ -412,21 +490,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [TextButton.icon(onPressed: () => _pickImage(ImageSource.camera, setModalState), icon: const Icon(Icons.camera_alt), label: const Text("Zrób zdjęcie")), TextButton.icon(onPressed: () => _pickImage(ImageSource.gallery, setModalState), icon: const Icon(Icons.photo_library), label: const Text("Z galerii"))]),
                       ],
                     ),
-                    const SizedBox(height: 15),
-                    DropdownButtonFormField<String>(
-                      value: _selectedPayerId, decoration: const InputDecoration(labelText: 'Kto płacił?'),
-                      items: uniqueMembers.map((m) => DropdownMenuItem(value: m.id, child: Text(m.name))).toList(),
-                      onChanged: (val) => setModalState(() { _selectedPayerId = val; }),
-                    ),
-                    const SizedBox(height: 15),
-                    const Text('Dla kogo (kto z tego korzystał):', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ...uniqueMembers.map((m) {
-                      return CheckboxListTile(title: Text(m.name), value: _selectedBeneficiaries.contains(m.id), onChanged: (bool? checked) { setModalState(() { if (checked == true) _selectedBeneficiaries.add(m.id); else _selectedBeneficiaries.remove(m.id); }); });
-                    }),
+                    
                     const SizedBox(height: 20),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
-                      children: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Anuluj', style: TextStyle(color: Colors.grey))), const SizedBox(width: 10), ElevatedButton(onPressed: () => _saveExpense(existingId: isEditing ? existingExpense.id : null), child: Text(isEditing ? 'Zapisz zmiany' : 'Dodaj Wydatek'))],
+                      children: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Anuluj', style: TextStyle(color: Colors.grey))), const SizedBox(width: 10), ElevatedButton(onPressed: () => _saveExpense(existingId: isEditing ? existingExpense.id : null), child: Text(isEditing ? 'Zapisz zmiany' : 'Zapisz rachunek'))],
                     ),
                     const SizedBox(height: 10), 
                   ],
@@ -443,57 +511,23 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: _isSearching
-            ? TextField(
-                autofocus: true, style: const TextStyle(fontSize: 18), 
-                decoration: const InputDecoration(hintText: 'Szukaj wydatku...', border: InputBorder.none),
-                onChanged: (value) => setState(() { _searchQuery = value; }),
-              )
-            : Text(widget.group.name),
+        title: _isSearching ? TextField(autofocus: true, style: const TextStyle(fontSize: 18), decoration: const InputDecoration(hintText: 'Szukaj wydatku...', border: InputBorder.none), onChanged: (value) => setState(() { _searchQuery = value; })) : Text(widget.group.name),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.share, color: Colors.blue),
-            tooltip: "Zaproś znajomych",
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('Zaproś znajomych 🌍', textAlign: TextAlign.center),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text('Podaj znajomym ten kod, aby mogli dołączyć do wyjazdu w swojej aplikacji:', textAlign: TextAlign.center),
-                      const SizedBox(height: 20),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                        decoration: BoxDecoration(color: Theme.of(context).colorScheme.primaryContainer, borderRadius: BorderRadius.circular(12)),
-                        child: Text(widget.group.inviteCode ?? 'Brak kodu', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 8, color: Theme.of(context).colorScheme.onPrimaryContainer)),
-                      ),
-                    ],
-                  ),
-                  actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Gotowe'))],
-                ),
-              );
-            },
-          ),
+          IconButton(icon: const Icon(Icons.share, color: Colors.blue), tooltip: "Zaproś znajomych", onPressed: () { showDialog(context: context, builder: (ctx) => AlertDialog(title: const Text('Zaproś znajomych 🌍', textAlign: TextAlign.center), content: Column(mainAxisSize: MainAxisSize.min, children: [const Text('Podaj znajomym ten kod, aby mogli dołączyć do wyjazdu w swojej aplikacji:', textAlign: TextAlign.center), const SizedBox(height: 20), Container(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15), decoration: BoxDecoration(color: Theme.of(context).colorScheme.primaryContainer, borderRadius: BorderRadius.circular(12)), child: Text(widget.group.inviteCode ?? 'Brak kodu', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 8, color: Theme.of(context).colorScheme.onPrimaryContainer)))]), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Gotowe'))])); }),
           IconButton(icon: const Icon(Icons.history, color: Colors.purple), tooltip: "Historia", onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => HistoryScreen(group: widget.group)))),
           IconButton(icon: const Icon(Icons.pie_chart, color: Colors.green), tooltip: "Podsumowanie", onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (ctx) => SettlementScreen(group: widget.group)))),
           IconButton(icon: Icon(_isSearching ? Icons.close : Icons.search, color: Colors.orange), onPressed: () => setState(() { if (_isSearching) { _isSearching = false; _searchQuery = ""; } else { _isSearching = true; } })),
-          if (!_isSearching)
-            IconButton(icon: const Icon(Icons.manage_accounts, color: Colors.redAccent), tooltip: 'Zarządzaj uczestnikami', onPressed: _showManageMembersSheet)
+          if (!_isSearching) IconButton(icon: const Icon(Icons.manage_accounts, color: Colors.redAccent), tooltip: 'Zarządzaj uczestnikami', onPressed: _showManageMembersSheet)
         ],
       ),
       
-      // --- ZMIANA: Dodano nasłuchiwanie na metadane cache (Offline) ---
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance.collection('groups').doc(widget.group.id).snapshots(includeMetadataChanges: true),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
           if (!snapshot.hasData || snapshot.data?.data() == null) return const Center(child: Text("Błąd ładowania."));
 
-          // Sprawdzamy, czy dane są ładowane z pamięci telefonu (brak neta)
           final bool isOffline = snapshot.data!.metadata.isFromCache;
-          
           final data = snapshot.data!.data() as Map<String, dynamic>;
           final rawMembers = data['membersData'] as List<dynamic>? ?? [];
           final cloudMembers = rawMembers.map((m) => Member(id: m['id'], name: m['name'])).toList();
@@ -504,6 +538,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               id: e['id'], title: e['title'], amount: (e['amount'] as num).toDouble(),
               payerId: e['payerId'], date: (e['date'] as Timestamp).toDate(),
               beneficiaryIds: List<String>.from(e['beneficiaryIds'] ?? []), category: e['category'] ?? 'other', receiptPath: e['receiptPath'],
+              items: (e['items'] as List<dynamic>? ?? []).map((i) => ExpenseItem.fromMap(Map<String, dynamic>.from(i))).toList(),
             );
           }).toList();
 
@@ -517,7 +552,11 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             }
             if (_filterMyExpenses) {
               final myId = FirebaseAuth.instance.currentUser?.uid;
-              if (myId != null && expense.payerId != myId && !expense.beneficiaryIds.contains(myId)) return false;
+              if (myId != null && expense.payerId != myId) {
+                 bool inGeneral = expense.beneficiaryIds.contains(myId);
+                 bool inItems = expense.items.any((i) => i.beneficiaries.contains(myId));
+                 if (!inGeneral && !inItems) return false;
+              }
             }
             if (_filterCategory != 'all' && expense.category != _filterCategory) return false;
             return true;
@@ -533,83 +572,41 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
           return Column(
             children: [
-              // --- NOWOŚĆ: PASEK OFFLINE ---
               if (isOffline)
-                Container(
-                  width: double.infinity,
-                  color: Colors.redAccent,
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: const Text(
-                    'Brak internetu. Działasz w trybie offline ☁️',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                  ),
-                ),
-
+                Container(width: double.infinity, color: Colors.redAccent, padding: const EdgeInsets.symmetric(vertical: 6), child: const Text('Brak internetu. Działasz w trybie offline ☁️', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold))),
               InkWell(
                 onTap: _showManageMembersSheet,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.2),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.2),
                   child: Row(
                     children: [
-                      const Icon(Icons.group, color: Colors.blueGrey, size: 20),
-                      const SizedBox(width: 8),
-                      const Text('Uczestnicy: ', style: TextStyle(color: Colors.blueGrey, fontWeight: FontWeight.bold)),
-                      const SizedBox(width: 8),
-                      _buildStackedAvatars(cloudMembers),
-                      const Spacer(),
-                      const Icon(Icons.edit, color: Colors.grey, size: 18),
+                      const Icon(Icons.group, color: Colors.blueGrey, size: 20), const SizedBox(width: 8), const Text('Uczestnicy: ', style: TextStyle(color: Colors.blueGrey, fontWeight: FontWeight.bold)), const SizedBox(width: 8),
+                      _buildStackedAvatars(cloudMembers), const Spacer(), const Icon(Icons.edit, color: Colors.grey, size: 18),
                     ],
                   ),
                 ),
               ),
               
               Container(
-                height: 50,
-                padding: const EdgeInsets.symmetric(horizontal: 10),
+                height: 50, padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: ListView(
                   scrollDirection: Axis.horizontal,
                   children: [
+                    Padding(padding: const EdgeInsets.only(right: 8.0), child: FilterChip(label: const Text('Tylko moje'), selected: _filterMyExpenses, onSelected: (val) => setState(() => _filterMyExpenses = val), selectedColor: Theme.of(context).colorScheme.primaryContainer)),
                     Padding(
                       padding: const EdgeInsets.only(right: 8.0),
-                      child: FilterChip(
-                        label: const Text('Tylko moje'),
-                        selected: _filterMyExpenses,
-                        onSelected: (val) => setState(() => _filterMyExpenses = val),
-                        selectedColor: Theme.of(context).colorScheme.primaryContainer,
+                      child: PopupMenuButton<String>(
+                        initialValue: _sortBy, onSelected: (val) => setState(() => _sortBy = val),
+                        itemBuilder: (ctx) => const [PopupMenuItem(value: 'newest', child: Text('🗓️ Najnowsze')), PopupMenuItem(value: 'oldest', child: Text('🗓️ Najstarsze')), PopupMenuItem(value: 'highest', child: Text('💰 Najdroższe')), PopupMenuItem(value: 'lowest', child: Text('🪙 Najtańsze'))],
+                        child: Chip(label: Row(children: [Text(_sortBy == 'newest' ? 'Najnowsze' : _sortBy == 'oldest' ? 'Najstarsze' : _sortBy == 'highest' ? 'Najdroższe' : 'Najtańsze'), const Icon(Icons.arrow_drop_down, size: 18)]), backgroundColor: _sortBy != 'newest' ? Theme.of(context).colorScheme.primaryContainer : null),
                       ),
                     ),
                     Padding(
                       padding: const EdgeInsets.only(right: 8.0),
                       child: PopupMenuButton<String>(
-                        initialValue: _sortBy,
-                        onSelected: (val) => setState(() => _sortBy = val),
-                        itemBuilder: (ctx) => const [
-                          PopupMenuItem(value: 'newest', child: Text('🗓️ Najnowsze')),
-                          PopupMenuItem(value: 'oldest', child: Text('🗓️ Najstarsze')),
-                          PopupMenuItem(value: 'highest', child: Text('💰 Najdroższe')),
-                          PopupMenuItem(value: 'lowest', child: Text('🪙 Najtańsze')),
-                        ],
-                        child: Chip(
-                          label: Row(children: [Text(_sortBy == 'newest' ? 'Najnowsze' : _sortBy == 'oldest' ? 'Najstarsze' : _sortBy == 'highest' ? 'Najdroższe' : 'Najtańsze'), const Icon(Icons.arrow_drop_down, size: 18)]),
-                          backgroundColor: _sortBy != 'newest' ? Theme.of(context).colorScheme.primaryContainer : null,
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8.0),
-                      child: PopupMenuButton<String>(
-                        initialValue: _filterCategory,
-                        onSelected: (val) => setState(() => _filterCategory = val),
-                        itemBuilder: (ctx) => [
-                          const PopupMenuItem(value: 'all', child: Text('Wszystkie kategorie')),
-                          ...categories.entries.map((e) => PopupMenuItem(value: e.key, child: Text(e.value['label']))),
-                        ],
-                        child: Chip(
-                          label: Row(children: [Text(_filterCategory == 'all' ? 'Kategoria' : categories[_filterCategory]!['label']), const Icon(Icons.arrow_drop_down, size: 18)]),
-                          backgroundColor: _filterCategory != 'all' ? Theme.of(context).colorScheme.primaryContainer : null,
-                        ),
+                        initialValue: _filterCategory, onSelected: (val) => setState(() => _filterCategory = val),
+                        itemBuilder: (ctx) => [const PopupMenuItem(value: 'all', child: Text('Wszystkie kategorie')), ...categories.entries.map((e) => PopupMenuItem(value: e.key, child: Text(e.value['label'])))],
+                        child: Chip(label: Row(children: [Text(_filterCategory == 'all' ? 'Kategoria' : categories[_filterCategory]!['label']), const Icon(Icons.arrow_drop_down, size: 18)]), backgroundColor: _filterCategory != 'all' ? Theme.of(context).colorScheme.primaryContainer : null),
                       ),
                     ),
                   ],
@@ -629,15 +626,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                               
                               bool showDateHeader = false;
                               if (_sortBy == 'newest' || _sortBy == 'oldest') {
-                                if (index == 0) {
-                                  showDateHeader = true; 
-                                } else {
+                                if (index == 0) showDateHeader = true; 
+                                else {
                                   final prevExpense = displayedExpenses[index - 1];
-                                  if (expense.date.year != prevExpense.date.year ||
-                                      expense.date.month != prevExpense.date.month ||
-                                      expense.date.day != prevExpense.date.day) {
-                                    showDateHeader = true;
-                                  }
+                                  if (expense.date.year != prevExpense.date.year || expense.date.month != prevExpense.date.month || expense.date.day != prevExpense.date.day) showDateHeader = true;
                                 }
                               }
 
@@ -646,9 +638,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                               final dateStr = "${expense.date.day.toString().padLeft(2,'0')}.${expense.date.month.toString().padLeft(2,'0')}.${expense.date.year}";
 
                               Widget expenseTile = Dismissible(
-                                key: Key(expense.id),
-                                direction: DismissDirection.endToStart,
-                                background: Container(color: Colors.red.withOpacity(0.8), alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete_forever, color: Colors.white)),
+                                key: Key(expense.id), direction: DismissDirection.endToStart, background: Container(color: Colors.red.withOpacity(0.8), alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete_forever, color: Colors.white)),
                                 onDismissed: (direction) async {
                                   final docRef = FirebaseFirestore.instance.collection('groups').doc(widget.group.id);
                                   final currentDoc = await docRef.get();
@@ -660,7 +650,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                                 },
                                 child: ListTile(
                                   leading: CircleAvatar(backgroundColor: (catData['color'] as Color).withOpacity(0.2), child: Icon(catData['icon'] as IconData, color: catData['color'] as Color)),
-                                  title: Text(expense.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  // --- ZMIANA: Dodajemy tekst "(Paragon)" jeśli to ten typ
+                                  title: Row(
+                                    children: [
+                                      Flexible(child: Text(expense.title, style: const TextStyle(fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
+                                      if (expense.items.isNotEmpty) const Padding(padding: EdgeInsets.only(left: 6.0), child: Text('(Paragon)', style: TextStyle(fontSize: 10, color: Colors.teal, fontWeight: FontWeight.bold))),
+                                    ],
+                                  ),
                                   subtitle: Text('Płacił: $payerName'),
                                   trailing: Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -675,16 +671,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
                               if (showDateHeader) {
                                 final dayName = _getWeekdayName(expense.date.weekday);
-                                return Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Padding(
-                                      padding: const EdgeInsets.only(left: 16.0, top: 16.0, bottom: 8.0),
-                                      child: Text("$dateStr • $dayName", style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.primary)),
-                                    ),
-                                    expenseTile,
-                                  ],
-                                );
+                                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Padding(padding: const EdgeInsets.only(left: 16.0, top: 16.0, bottom: 8.0), child: Text("$dateStr • $dayName", style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.primary))), expenseTile]);
                               }
 
                               return expenseTile;
