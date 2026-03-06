@@ -7,6 +7,7 @@ class Group {
   final DateTime createdAt;
   final String? inviteCode;
   final String currency;
+  final bool isArchived;
   List<Member> members;
   List<Expense> expenses;
 
@@ -15,7 +16,8 @@ class Group {
     required this.name,
     required this.createdAt,
     this.inviteCode,
-    this.currency = 'zł', 
+    this.currency = 'zł',
+    this.isArchived = false,
     this.members = const [],
     this.expenses = const [],
   });
